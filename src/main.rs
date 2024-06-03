@@ -34,18 +34,23 @@ enum Operation {
     /// Pull updates from the server and update the local filesystem.
     Pull,
 
-    /// Perform initial setup for a synced directory. Prompts for authentication interactively.
-    Setup {
-        #[arg()]
-        remote_path: String,
-
-        /// Override the root namespace ID to something else.
-        #[arg(long)]
-        root_namespace_id: Option<String>,
-    },
+    /// Perform initial setup for a synced directory.
+    ///
+    /// Prompts for authentication interactively.
+    Setup(SetupArgs),
 }
 
-fn setup(remote_path: &str, root_nsid: Option<&str>) -> anyhow::Result<()> {
+#[derive(Debug, Clone, Parser)]
+struct SetupArgs {
+    #[arg()]
+    remote_path: String,
+
+    /// Override the root namespace ID to something else.
+    #[arg(long)]
+    root_namespace_id: Option<String>,
+}
+
+fn setup(args: SetupArgs) -> anyhow::Result<()> {
     let db = Database::open("./.dbxcli.db")?;
 
     if db.config("auth")?.is_some() {
@@ -56,9 +61,9 @@ fn setup(remote_path: &str, root_nsid: Option<&str>) -> anyhow::Result<()> {
     auth.obtain_access_token(NoauthDefaultClient::default())?;
     db.set_config("auth", auth.save().unwrap().as_str())?;
 
-    db.set_config("remote_path", remote_path)?;
-    if let Some(nsid) = root_nsid {
-        db.set_config("root_nsid", nsid)?;
+    db.set_config("remote_path", &args.remote_path)?;
+    if let Some(nsid) = args.root_namespace_id {
+        db.set_config("root_nsid", &nsid)?;
     }
 
     Ok(())
@@ -69,10 +74,7 @@ fn main() -> anyhow::Result<()> {
     println!("{args:#?}");
 
     match args.op {
-        Operation::Setup {
-            remote_path,
-            root_namespace_id,
-        } => setup(&remote_path, root_namespace_id.as_deref())?,
+        Operation::Setup(setup_args) => setup(setup_args)?,
         _ => todo!("operation {:?}", args.op),
     }
 
