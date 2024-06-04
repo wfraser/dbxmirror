@@ -220,7 +220,7 @@ fn pull(db: &Database) -> anyhow::Result<()> {
 fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetadata>, db: &Database) -> anyhow::Result<bool> {
     eprintln!("checking pre-existing local file");
     let (mtime, content_hash) = db.get_file(path)?
-        .ok_or_else(|| anyhow!("missing database entry for existing local file {path}"))?;
+        .ok_or_else(|| anyhow!("refusing to clobber existing local file {path}"))?;
     if local.modified().with_context(|| format!("failed to stat {path}"))? != mtime {
         bail!("local file modification time mismatch: {path}");
     }
