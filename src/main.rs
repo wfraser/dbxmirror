@@ -8,6 +8,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use crossbeam_channel::Receiver;
+use dropbox_sdk::common::PathRoot;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
 use dropbox_sdk::files::{FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata};
@@ -262,12 +263,18 @@ fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetada
 }
 
 fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
-    Ok(Arc::new(UserAuthDefaultClient::new(
+    let mut client = UserAuthDefaultClient::new(
         Authorization::load(
             db.config("client_id")?,
             &db.config("auth")?,
         ).ok_or_else(|| anyhow!("unable to load authorization from db"))?
-    )))
+    );
+
+    if let Some(nsid) = db.config_opt("root_nsid")? {
+        client.set_path_root(&PathRoot::NamespaceId(nsid));
+    }
+
+    Ok(Arc::new(client))
 }
 
 fn main() -> anyhow::Result<()> {
