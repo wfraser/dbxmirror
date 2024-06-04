@@ -2,6 +2,7 @@ mod db;
 mod downloader;
 
 use std::{fs, io};
+use std::fs::File;
 use std::sync::Arc;
 use std::time::SystemTime;
 use anyhow::{anyhow, bail, Context};
@@ -13,8 +14,10 @@ use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
 use dropbox_sdk::files::{FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata};
 use dropbox_sdk::oauth2::Authorization;
+use dropbox_toolbox::content_hash::ContentHash;
 use dropbox_toolbox::ResultExt;
 use scopeguard::{guard, ScopeGuard};
+use time::OffsetDateTime;
 use crate::db::Database;
 use crate::downloader::{Downloader, DownloadRequest, DownloadResult};
 
@@ -161,7 +164,7 @@ fn pull(db: &Database) -> anyhow::Result<()> {
 
     let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
     let dl_tx = guard(dl_tx, |dl_tx| {
-        eprintln!("error occurred; waiting for existing downloads");
+        eprintln!("error occurred; waiting for in-flight downloads");
         drop(dl_tx);
         _ = complete_downloads(&dl_rx, db, true);
     });
@@ -186,7 +189,9 @@ fn pull(db: &Database) -> anyhow::Result<()> {
                     eprintln!("-> {path}");
                     match fs::metadata(&path) {
                         Ok(local) => {
-                            if check_local_file(&path, &local, Some(&remote), db)? {
+                            if check_local_file(&path, &local, Some(&remote), db)
+                                .with_context(|| format!("refusing to clobber local file {path}"))?
+                            {
                                 continue;
                             }
                         }
@@ -215,7 +220,8 @@ fn pull(db: &Database) -> anyhow::Result<()> {
                 Metadata::Deleted(_) => {
                     match fs::metadata(&path) {
                         Ok(local) => {
-                            check_local_file(&path, &local, None, db)?;
+                            check_local_file(&path, &local, None, db)
+                                .with_context(|| format!("refusing to delete local file {path}"))?;
                             fs::remove_file(&path)
                                 .with_context(|| format!("failed to remove local file {path}"))?;
                             db.remove_file(&path)?;
@@ -252,21 +258,50 @@ fn pull(db: &Database) -> anyhow::Result<()> {
 
 fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetadata>, db: &Database) -> anyhow::Result<bool> {
     eprintln!("checking pre-existing local file");
-    let (mtime, content_hash) = db.get_file(path)?
-        .ok_or_else(|| anyhow!("refusing to clobber existing local file {path}"))?;
-    if local.modified().with_context(|| format!("failed to stat {path}"))? != mtime {
-        bail!("local file modification time mismatch: {path}");
+
+    let local_content_hash = {
+        let mut h = ContentHash::new();
+        let f = File::open(path).context("failed to open local file")?;
+        h.read_stream(f).context("failed to hash local file")?;
+        h.finish_hex()
+    };
+
+    let local_mtime = local.modified()
+        .context("failed to stat")?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_else(|e| -(e.duration().as_secs() as i64));
+
+    // First, check local file against existing database entry.
+    if let Some((db_mtime, db_content_hash)) = db.get_file(path)? {
+        if local_mtime != db_mtime {
+            bail!("local file modification time mismatch with DB");
+        }
+        if local_content_hash != db_content_hash {
+            bail!("local file hash mismatch with DB");
+        }
+
+        if remote.is_none() {
+            bail!("refusing to clobber local file without database entry or remote metadata");
+        }
     }
+
+    // If we have remote metadata, check it against that too.
     if let Some(remote) = remote {
-        if &content_hash == remote.content_hash.as_ref().unwrap() {
-            eprintln!("local file is identical");
-            db.set_file(
-                path,
-                mtime.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64,
-                &content_hash)?;
+        let remote_mtime = OffsetDateTime::parse(
+            &remote.client_modified,
+            &time::format_description::well_known::Rfc3339)?
+            .unix_timestamp();
+        let remote_content_hash = remote.content_hash.as_deref().ok_or_else(|| anyhow!("missing content_hash"))?;
+
+        if local_mtime == remote_mtime && local_content_hash == remote_content_hash {
+            eprintln!("local file is already up-to-date");
+            db.set_file(path, remote_mtime, remote_content_hash)?;
             return Ok(true);
         }
     }
+
+    // Ok to download and overwrite.
     Ok(false)
 }
 

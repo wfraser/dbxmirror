@@ -1,9 +1,7 @@
 use std::convert::identity;
 use std::path::Path;
-use std::time::SystemTime;
 use anyhow::{anyhow, bail, Context};
 use rusqlite::{Connection, OptionalExtension};
-use time::Duration;
 
 pub struct Database {
     sql: Connection,
@@ -80,14 +78,14 @@ impl Database {
         Ok(())
     }
 
-    pub fn get_file(&self, path: &str) -> anyhow::Result<Option<(SystemTime, String)>> {
+    pub fn get_file(&self, path: &str) -> anyhow::Result<Option<(i64, String)>> {
         if let Some((mtime, content_hash)) = self.sql.query_row(
             "SELECT mtime, content_hash FROM files WHERE path = ?1",
             [path],
             |row| Ok((row.get(0)?, row.get(1)?)))
             .optional()?
         {
-            Ok(Some((SystemTime::UNIX_EPOCH + Duration::seconds(mtime), content_hash)))
+            Ok(Some((mtime, content_hash)))
         } else {
             Ok(None)
         }
