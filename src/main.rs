@@ -7,13 +7,14 @@ use std::time::SystemTime;
 use anyhow::{anyhow, bail, Context};
 use clap::Parser;
 use clap_wrapper::clap_wrapper;
+use crossbeam_channel::Receiver;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
 use dropbox_sdk::files::{FileMetadata, ListFolderArg, ListFolderContinueArg, Metadata};
 use dropbox_sdk::oauth2::Authorization;
 use dropbox_toolbox::ResultExt;
 use crate::db::Database;
-use crate::downloader::{Downloader, DownloadRequest};
+use crate::downloader::{Downloader, DownloadRequest, DownloadResult};
 
 const DATABASE_PATH: &str = "./.dbxcli.db";
 
@@ -81,6 +82,27 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database) -> anyhow::Result<()> {
+    let mut result = Ok(());
+    while let Ok(rx) = dl_rx.try_recv() {
+        if let Err(e) = rx.result {
+            eprintln!("download error: {e:#}");
+            if result.is_ok() {
+
+                // Save the first error.
+                result = Err(e);
+            }
+
+            // Complete any other pending finished downloads.
+            continue;
+        }
+
+        eprintln!("completed {}", rx.path);
+        db.set_file(&rx.path, rx.mtime, &rx.content_hash)?;
+    }
+    result
+}
+
 fn pull(db: &Database) -> anyhow::Result<()> {
     let remote_root = db.config("remote_path")?;
     let client = client(db)?;
@@ -101,18 +123,9 @@ fn pull(db: &Database) -> anyhow::Result<()> {
 
     let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
 
-    let complete_downloads = || -> anyhow::Result<()> {
-        while let Ok(rx) = dl_rx.try_recv() {
-            rx.result?;
-            eprintln!("completed {}", rx.path);
-            db.set_file(&rx.path, rx.mtime, &rx.content_hash)?;
-        }
-        Ok(())
-    };
-
     loop {
         for entry in page.entries {
-            complete_downloads()?;
+            complete_downloads(&dl_rx, db)?;
 
             let path = match &entry {
                 Metadata::File(f) => f.path_display.as_ref(),
@@ -186,7 +199,7 @@ fn pull(db: &Database) -> anyhow::Result<()> {
             .combine()?;
     }
 
-    complete_downloads()?;
+    complete_downloads(&dl_rx, db)?;
     db.set_config("cursor", &page.cursor)?;
 
     Ok(())
