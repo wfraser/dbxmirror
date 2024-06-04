@@ -134,7 +134,15 @@ fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bo
 }
 
 fn pull(db: &Database) -> anyhow::Result<()> {
-    let remote_root = db.config("remote_path")?;
+    let remote_root = {
+        let p = db.config("remote_path")?;
+        if p == "/" {
+            String::new()
+        } else {
+            p
+        }
+    };
+
     let client = client(db)?;
 
     let mut page = if let Some(cursor) = db.config_opt("cursor")? {

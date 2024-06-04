@@ -28,14 +28,14 @@ impl Database {
         }
 
         sql.execute("CREATE TABLE IF NOT EXISTS config (\
-            name STRING PRIMARY KEY,\
-            value STRING\
+            name TEXT PRIMARY KEY,\
+            value TEXT\
         )", [])?;
 
         sql.execute("CREATE TABLE IF NOT EXISTS files (\
-            path STRING PRIMARY KEY,\
+            path TEXT PRIMARY KEY,\
             mtime INTEGER,\
-            content_hash STRING\
+            content_hash TEXT\
         )", [])?;
 
         Ok(Self { sql })
