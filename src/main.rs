@@ -13,6 +13,7 @@ use dropbox_sdk::files;
 use dropbox_sdk::files::{FileMetadata, ListFolderArg, ListFolderContinueArg, Metadata};
 use dropbox_sdk::oauth2::Authorization;
 use dropbox_toolbox::ResultExt;
+use scopeguard::{guard, ScopeGuard};
 use crate::db::Database;
 use crate::downloader::{Downloader, DownloadRequest, DownloadResult};
 
@@ -82,9 +83,13 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database) -> anyhow::Result<()> {
+fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bool) -> anyhow::Result<()> {
     let mut result = Ok(());
-    while let Ok(rx) = dl_rx.try_recv() {
+    while let Ok(rx) = if block {
+        dl_rx.recv().map_err(|_| ())
+    } else {
+        dl_rx.try_recv().map_err(|_| ())
+    } {
         if let Err(e) = rx.result {
             eprintln!("download error: {e:#}");
             if result.is_ok() {
@@ -122,10 +127,15 @@ fn pull(db: &Database) -> anyhow::Result<()> {
     };
 
     let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
+    let dl_tx = guard(dl_tx, |dl_tx| {
+        eprintln!("error occurred; waiting for existing downloads");
+        drop(dl_tx);
+        _ = complete_downloads(&dl_rx, db, true);
+    });
 
     loop {
         for entry in page.entries {
-            complete_downloads(&dl_rx, db)?;
+            complete_downloads(&dl_rx, db, false)?;
 
             let path = match &entry {
                 Metadata::File(f) => f.path_display.as_ref(),
@@ -199,7 +209,9 @@ fn pull(db: &Database) -> anyhow::Result<()> {
             .combine()?;
     }
 
-    complete_downloads(&dl_rx, db)?;
+    eprintln!("waiting for downloads");
+    drop(ScopeGuard::into_inner(dl_tx));
+    complete_downloads(&dl_rx, db, true)?;
     db.set_config("cursor", &page.cursor)?;
 
     Ok(())

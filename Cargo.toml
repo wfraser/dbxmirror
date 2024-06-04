@@ -13,6 +13,7 @@ crossbeam-channel = "0.5.13"
 dropbox-sdk = { version = "*", default-features = false }
 dropbox-toolbox = { git = "https://github.com/wfraser/dropbox-toolbox.git", version = "0.1.0" }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
+scopeguard = "1.2.0"
 threadpool = "1.8.1"
 time = { version = "0.3.36", features = ["parsing"] }
 
