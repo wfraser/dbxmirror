@@ -49,7 +49,7 @@ enum Operation {
     Check,
 
     /// Pull updates from the server and update the local filesystem.
-    Pull,
+    Pull(PullArgs),
 
     /// Perform initial setup for a synced directory.
     ///
@@ -65,6 +65,13 @@ struct SetupArgs {
     /// Override the root namespace ID to something else.
     #[arg(long)]
     root_namespace_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Parser)]
+struct PullArgs {
+    /// Don't download any files, but do check existing local files.
+    #[arg(long)]
+    no_download: bool,
 }
 
 fn setup(args: SetupArgs) -> anyhow::Result<()> {
@@ -136,7 +143,7 @@ fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bo
     result
 }
 
-fn pull(db: &Database) -> anyhow::Result<()> {
+fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     let remote_root = {
         let p = db.config("remote_path")?;
         if p == "/" {
@@ -168,6 +175,9 @@ fn pull(db: &Database) -> anyhow::Result<()> {
         drop(dl_tx);
         _ = complete_downloads(&dl_rx, db, true);
     });
+
+    let mut downloaded_files = 0;
+    let mut downloaded_bytes = 0;
 
     loop {
         for entry in page.entries {
@@ -209,13 +219,17 @@ fn pull(db: &Database) -> anyhow::Result<()> {
                         .unix_timestamp();
                     let content_hash = remote.content_hash.ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
 
-                    dl_tx.send(DownloadRequest {
-                        path,
-                        rev: remote.rev,
-                        size: remote.size,
-                        mtime,
-                        content_hash,
-                    }).unwrap()
+                    downloaded_files += 1;
+                    downloaded_bytes += remote.size;
+                    if !args.no_download {
+                        dl_tx.send(DownloadRequest {
+                            path,
+                            rev: remote.rev,
+                            size: remote.size,
+                            mtime,
+                            content_hash,
+                        }).unwrap();
+                    }
                 }
                 Metadata::Deleted(_) => {
                     match fs::metadata(&path) {
@@ -248,10 +262,23 @@ fn pull(db: &Database) -> anyhow::Result<()> {
             .combine()?;
     }
 
-    eprintln!("waiting for downloads");
+    // Defuse error handler.
     drop(ScopeGuard::into_inner(dl_tx));
-    complete_downloads(&dl_rx, db, true)?;
-    db.set_config("cursor", &page.cursor)?;
+
+    if downloaded_files > 0 {
+        eprintln!("waiting for downloads");
+        complete_downloads(&dl_rx, db, true)?;
+    }
+
+    eprintln!("{}downloaded {downloaded_bytes} bytes across {downloaded_files} files",
+        if args.no_download { "would have " } else { "" }
+    );
+
+    if args.no_download && downloaded_files > 0 {
+        eprintln!("not updating cursor because some needed files were not downloaded");
+    } else {
+        db.set_config("cursor", &page.cursor)?;
+    }
 
     Ok(())
 }
@@ -335,7 +362,7 @@ fn main() -> anyhow::Result<()> {
 
     match args.op {
         Operation::Setup(_) => unreachable!(),
-        Operation::Pull => pull(&db)?,
+        Operation::Pull(pull_args) => pull(pull_args, &db)?,
         _ => todo!("operation {:?}", args.op),
     }
 
