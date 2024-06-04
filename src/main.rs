@@ -10,7 +10,7 @@ use clap_wrapper::clap_wrapper;
 use crossbeam_channel::Receiver;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
-use dropbox_sdk::files::{FileMetadata, ListFolderArg, ListFolderContinueArg, Metadata};
+use dropbox_sdk::files::{FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata};
 use dropbox_sdk::oauth2::Authorization;
 use dropbox_toolbox::ResultExt;
 use scopeguard::{guard, ScopeGuard};
@@ -67,18 +67,42 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
     let db = Database::open(DATABASE_PATH)?;
 
     if db.config_opt("auth")?.is_some() {
-        bail!("this directory is already configured");
+        bail!("this directory is already configured; remove {DATABASE_PATH} to setup again");
     }
 
     let mut auth = dropbox_sdk::oauth2::get_auth_from_env_or_prompt();
     auth.obtain_access_token(NoauthDefaultClient::default())?;
-    db.set_config("client_id", &auth.client_id)?;
-    db.set_config("auth", auth.save().unwrap().as_str())?;
+
+    let client_id = auth.client_id.clone();
+    let saved_auth = auth.save().unwrap();
+
+    if args.remote_path != "/" {
+        let client = UserAuthDefaultClient::new(auth);
+        match files::get_metadata(&client, &GetMetadataArg::new(args.remote_path.clone()))
+            .combine()
+        {
+            Ok(meta) => {
+                if matches!(meta, Metadata::File(_)) {
+                    bail!("Remote path {:?} refers to a file, not a folder.", args.remote_path);
+                }
+            }
+            Err(e) => {
+                bail!("Failed to look up remote path {:?}: {e}", args.remote_path);
+            }
+        }
+    }
+
+    db.set_config("client_id", &client_id)?;
+    db.set_config("auth", &saved_auth)?;
 
     db.set_config("remote_path", &args.remote_path)?;
     if let Some(nsid) = args.root_namespace_id {
         db.set_config("root_nsid", &nsid)?;
+    } else {
+        db.unset_config("root_nsid")?;
     }
+
+    db.unset_config("cursor")?;
 
     Ok(())
 }

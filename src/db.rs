@@ -66,6 +66,11 @@ impl Database {
         Ok(())
     }
 
+    pub fn unset_config(&self, name: &str) -> anyhow::Result<()> {
+        self.sql.execute("DELETE FROM config WHERE name = ?1", [name])?;
+        Ok(())
+    }
+
     pub fn set_file(&self, path: &str, mtime: i64, content_hash: &str) -> anyhow::Result<()> {
         self.sql.execute(
             "INSERT INTO files (path, mtime, content_hash) VALUES (?1, ?2, ?3) \
