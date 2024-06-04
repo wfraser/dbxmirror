@@ -12,3 +12,7 @@ clap-wrapper = { git = "https://github.com/wfraser/clap_wrapper.git" }
 dropbox-sdk = { version = "*", default-features = false }
 dropbox-toolbox = { git = "https://github.com/wfraser/dropbox-toolbox.git", version = "0.1.0" }
 rusqlite = { version = "0.31.0", features = ["bundled"] }
+time = { version = "0.3.36", features = ["parsing"] }
+
+[patch.crates-io]
+dropbox-sdk = { git = "https://github.com/wfraser/dropbox-sdk-rust.git" }
