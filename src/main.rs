@@ -1,18 +1,19 @@
 mod db;
+mod downloader;
 
 use std::{fs, io};
-use std::fs::File;
+use std::sync::Arc;
 use std::time::SystemTime;
 use anyhow::{anyhow, bail, Context};
 use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
-use dropbox_sdk::files::{DownloadArg, FileMetadata, ListFolderArg, ListFolderContinueArg, Metadata};
+use dropbox_sdk::files::{FileMetadata, ListFolderArg, ListFolderContinueArg, Metadata};
 use dropbox_sdk::oauth2::Authorization;
 use dropbox_toolbox::ResultExt;
-use time::Duration;
 use crate::db::Database;
+use crate::downloader::{Downloader, DownloadRequest};
 
 const DATABASE_PATH: &str = "./.dbxcli.db";
 
@@ -86,20 +87,33 @@ fn pull(db: &Database) -> anyhow::Result<()> {
 
     let mut page = if let Some(cursor) = db.config_opt("cursor")? {
         files::list_folder_continue(
-            &client,
+            client.as_ref(),
             &ListFolderContinueArg::new(cursor))
             .combine()?
     } else {
         files::list_folder(
-            &client,
+            client.as_ref(),
             &ListFolderArg::new(remote_root.clone())
                 .with_recursive(true)
                 .with_include_deleted(true))
             .combine()?
     };
 
+    let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
+
+    let complete_downloads = || -> anyhow::Result<()> {
+        while let Ok(rx) = dl_rx.try_recv() {
+            rx.result?;
+            eprintln!("completed {}", rx.path);
+            db.set_file(&rx.path, rx.mtime, &rx.content_hash)?;
+        }
+        Ok(())
+    };
+
     loop {
         for entry in page.entries {
+            complete_downloads()?;
+
             let path = match &entry {
                 Metadata::File(f) => f.path_display.as_ref(),
                 Metadata::Deleted(d) => d.path_display.as_ref(),
@@ -125,9 +139,22 @@ fn pull(db: &Database) -> anyhow::Result<()> {
                             return Err(e).with_context(|| format!("error checking metadata of local file {path}"));
                         }
                     }
-                    eprintln!("downloading");
-                    download(remote, &path, db, &client)
-                        .with_context(|| path.clone())?;
+
+                    let mtime = time::OffsetDateTime::parse(
+                        &remote.client_modified,
+                        &time::format_description::well_known::Rfc3339
+                    )
+                        .with_context(|| format!("failed to parse timestamp {}", remote.client_modified))?
+                        .unix_timestamp();
+                    let content_hash = remote.content_hash.ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
+
+                    dl_tx.send(DownloadRequest {
+                        path,
+                        rev: remote.rev,
+                        size: remote.size,
+                        mtime,
+                        content_hash,
+                    }).unwrap()
                 }
                 Metadata::Deleted(_) => {
                     match fs::metadata(&path) {
@@ -154,58 +181,13 @@ fn pull(db: &Database) -> anyhow::Result<()> {
         }
 
         page = files::list_folder_continue(
-            &client,
+            client.as_ref(),
             &ListFolderContinueArg::new(page.cursor))
             .combine()?;
     }
 
+    complete_downloads()?;
     db.set_config("cursor", &page.cursor)?;
-
-    Ok(())
-}
-
-fn download(remote: FileMetadata, path: &str, db: &Database, client: &UserAuthDefaultClient) -> anyhow::Result<()> {
-    let dl = files::download(
-        client,
-        &DownloadArg::new(remote.path_lower.unwrap())
-            .with_rev(remote.rev),
-        None,
-        None,
-    ).combine()?;
-
-    let content_length = dl.content_length.ok_or_else(|| anyhow!("missing content length"))?;
-    let content_hash = dl.result.content_hash.ok_or_else(|| anyhow!("missing content hash"))?;
-    let mtime = time::OffsetDateTime::parse(
-        &dl.result.client_modified,
-        &time::format_description::well_known::Rfc3339
-    ).with_context(|| format!("failed to parse timestamp {}", dl.result.client_modified))?;
-
-    if path.contains('/') {
-        let dir = path.rsplitn(2, '/').skip(1).next().unwrap();
-        println!("make dir {dir}");
-        fs::create_dir_all(dir)
-            .context("failed to create dirs")?;
-    }
-
-    let mut dest = File::create(path)
-        .context("failed to create file")?;
-
-    let written = io::copy(
-        &mut dl.body.ok_or_else(|| anyhow!("missing body for download"))?,
-        &mut dest,
-    )
-        .context("failed to save file")?;
-
-    if content_length != written {
-        bail!("mismatch between file content length ({content_length}) and written ({written})");
-    }
-
-    // TODO: verify content hash?
-
-    dest.set_modified(SystemTime::UNIX_EPOCH + Duration::seconds(mtime.unix_timestamp()))
-        .context("failed to set modified time on file")?;
-
-    db.set_file(path, mtime.unix_timestamp(), &content_hash)?;
 
     Ok(())
 }
@@ -230,13 +212,13 @@ fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetada
     Ok(false)
 }
 
-fn client(db: &Database) -> anyhow::Result<UserAuthDefaultClient> {
-    Ok(UserAuthDefaultClient::new(
+fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
+    Ok(Arc::new(UserAuthDefaultClient::new(
         Authorization::load(
             db.config("client_id")?,
             &db.config("auth")?,
         ).ok_or_else(|| anyhow!("unable to load authorization from db"))?
-    ))
+    )))
 }
 
 fn main() -> anyhow::Result<()> {
