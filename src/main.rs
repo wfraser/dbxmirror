@@ -3,6 +3,7 @@ mod downloader;
 
 use std::{fs, io};
 use std::fs::File;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::SystemTime;
 use anyhow::{anyhow, bail, Context};
@@ -78,6 +79,11 @@ struct PullArgs {
     /// Don't download any files, but do check existing local files.
     #[arg(long)]
     no_download: bool,
+
+    /// Pull the entire list of files from scratch instead of resuming from the last successful
+    /// pull.
+    #[arg(long)]
+    full: bool,
 }
 
 #[clap_wrapper]
@@ -214,7 +220,13 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
 
     let client = client(db)?;
 
-    let mut page = if let Some(cursor) = db.config_opt("cursor")? {
+    let cursor = if !args.full {
+        db.config_opt("cursor")?
+    } else {
+        None
+    };
+
+    let mut page = if let Some(cursor) = cursor {
         files::list_folder_continue(
             client.as_ref(),
             &ListFolderContinueArg::new(cursor))
@@ -237,6 +249,7 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
 
     let mut downloaded_files = 0;
     let mut downloaded_bytes = 0;
+    let mut would_download_files = vec![];
 
     loop {
         'entries: for entry in page.entries {
@@ -266,9 +279,11 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                     eprintln!("-> {path}");
                     match fs::metadata(&path) {
                         Ok(local) => {
-                            if check_local_file(&path, &local, Some(&remote), db)
+                            eprintln!("checking pre-existing local file");
+                            if check_local_file(&path, &local, Some(&remote), false, db)
                                 .with_context(|| format!("refusing to clobber local file {path}"))?
                             {
+                                eprintln!("local file is already up-to-date");
                                 continue;
                             }
                         }
@@ -288,7 +303,9 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
 
                     downloaded_files += 1;
                     downloaded_bytes += remote.size;
-                    if !args.no_download {
+                    if args.no_download {
+                        would_download_files.push(path);
+                    } else {
                         dl_tx.send(DownloadRequest {
                             path,
                             rev: remote.rev,
@@ -301,7 +318,7 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                 Metadata::Deleted(_) => {
                     match fs::metadata(&path) {
                         Ok(local) => {
-                            check_local_file(&path, &local, None, db)
+                            check_local_file(&path, &local, None, true, db)
                                 .with_context(|| format!("refusing to delete local file {path}"))?;
                             fs::remove_file(&path)
                                 .with_context(|| format!("failed to remove local file {path}"))?;
@@ -342,6 +359,10 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     );
 
     if args.no_download && downloaded_files > 0 {
+        eprintln!("would have downloaded these files:");
+        for file in would_download_files {
+            eprintln!("\t{file}");
+        }
         eprintln!("not updating cursor because some needed files were not downloaded");
     } else {
         db.set_config("cursor", &page.cursor)?;
@@ -350,14 +371,47 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetadata>, db: &Database) -> anyhow::Result<bool> {
-    eprintln!("checking pre-existing local file");
+fn check(db: &Database) -> anyhow::Result<()> {
+    let mut checks = 0;
+    let mut violations = 0;
+    db.for_files(|path| {
+        checks += 1;
+        violations += 1;
+        eprint!("{path}: ");
+        io::stderr().flush().unwrap();
+        match fs::metadata(path) {
+            Ok(local) => {
+                match check_local_file(path, &local, None, true, db) {
+                    Ok(_) => {
+                        eprint!("\r{:width$}\r", "", width=path.len() + 1);
+                        violations -= 1;
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                    }
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                eprintln!("local file not found");
+            }
+            Err(e) => {
+                eprintln!("failed to stat local file: {e}");
+            }
+        }
+        Ok(())
+    })?;
+    eprintln!("{checks} checks, {violations} violations");
+    Ok(())
+}
 
-    let local_content_hash = {
+fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetadata>, hash_files: bool, db: &Database) -> anyhow::Result<bool> {
+    let local_content_hash = if hash_files {
         let mut h = ContentHash::new();
         let f = File::open(path).context("failed to open local file")?;
         h.read_stream(f).context("failed to hash local file")?;
         h.finish_hex()
+    } else {
+        String::new()
     };
 
     let local_mtime = local.modified()
@@ -371,13 +425,11 @@ fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetada
         if local_mtime != db_mtime {
             bail!("local file modification time mismatch with DB");
         }
-        if local_content_hash != db_content_hash {
+        if !local_content_hash.is_empty() && local_content_hash != db_content_hash {
             bail!("local file hash mismatch with DB");
         }
-
-        if remote.is_none() {
-            bail!("refusing to clobber local file without database entry or remote metadata");
-        }
+    } else if remote.is_none() {
+        bail!("refusing to clobber local file without database entry or remote metadata");
     }
 
     // If we have remote metadata, check it against that too.
@@ -388,8 +440,9 @@ fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetada
             .unix_timestamp();
         let remote_content_hash = remote.content_hash.as_deref().ok_or_else(|| anyhow!("missing content_hash"))?;
 
-        if local_mtime == remote_mtime && local_content_hash == remote_content_hash {
-            eprintln!("local file is already up-to-date");
+        if local_mtime == remote_mtime
+            && (local_content_hash.is_empty() || local_content_hash == remote_content_hash)
+        {
             db.set_file(path, remote_mtime, remote_content_hash)?;
             return Ok(true);
         }
@@ -431,7 +484,7 @@ fn main() -> anyhow::Result<()> {
         Operation::Setup(_) => unreachable!(),
         Operation::Pull(pull_args) => pull(pull_args, &db)?,
         Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
-        _ => todo!("operation {:?}", args.op),
+        Operation::Check => check(&db)?,
     }
 
     Ok(())

@@ -96,6 +96,15 @@ impl Database {
         }
     }
 
+    pub fn for_files(&self, mut f: impl FnMut(&str) -> anyhow::Result<()>) -> anyhow::Result<()> {
+        self.sql.prepare("SELECT path FROM files")?
+            .query_map([], |row| row.get(0))?
+            .try_for_each(|r: rusqlite::Result<String>| {
+                let path = r?;
+                f(&path)
+            })
+    }
+
     pub fn remove_file(&self, path: &str) -> anyhow::Result<()> {
         self.sql.execute("DELETE FROM files WHERE path = ?1", [path])?;
         Ok(())
