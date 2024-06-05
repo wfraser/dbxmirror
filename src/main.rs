@@ -261,7 +261,7 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
             let path = match &entry {
                 Metadata::File(f) => f.path_display.as_ref(),
                 Metadata::Deleted(d) => d.path_display.as_ref(),
-                Metadata::Folder(_) => continue,
+                Metadata::Folder(f) => f.path_display.as_ref(),
             };
             let path = path
                 .ok_or_else(|| anyhow!("missing path_display field from API"))?
@@ -318,6 +318,11 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                         }).unwrap();
                     }
                 }
+                Metadata::Folder(_) => {
+                    // We don't store folders in the DB, but we can at least create them in the FS.
+                    eprintln!("-> [folder] {path}");
+                    create_dir(&path)?;
+                }
                 Metadata::Deleted(_) => {
                     if args.no_download {
                         eprintln!("skipping delete of {path}");
@@ -327,10 +332,18 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                         Ok(Some(mut local)) => {
                             check_local_file(&path, &mut local, None, true, db)
                                 .with_context(|| format!("refusing to delete local file {path}"))?;
-                            drop(local);
                             eprintln!("deleting {path}");
-                            fs::remove_file(&path)
-                                .with_context(|| format!("failed to remove local file {path}"))?;
+                            if let Err(e) = fs::remove_file(&path)
+                                .with_context(|| format!("failed to remove local file {path}"))
+                            {
+                                // Is it a directory?
+                                if local.metadata().map(|m| m.file_type().is_dir()).unwrap_or(false) {
+                                    fs::remove_dir(&path)
+                                        .with_context(|| format!("failed to remove local directory {path}"))?;
+                                } else {
+                                    return Err(e);
+                                }
+                            }
                             db.remove_file(&path)?;
                         }
                         Ok(None) => {
@@ -341,7 +354,6 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                         }
                     }
                 }
-                Metadata::Folder(_) => (),
             }
         }
 
@@ -516,7 +528,7 @@ fn open_file(path: &str) -> anyhow::Result<Option<File>> {
     Ok(Some(File::open(&cur).with_context(|| format!("failed to open file {cur:?}"))?))
 }
 
-pub(crate) fn create_file(path: &str) -> anyhow::Result<File> {
+fn create_dirs_case_insentive(path: &str) -> anyhow::Result<PathBuf> {
     let mut cur = PathBuf::from(".");
 
     let mut it = path.split('/').peekable();
@@ -538,7 +550,17 @@ pub(crate) fn create_file(path: &str) -> anyhow::Result<File> {
         fs::create_dir(&cur).with_context(|| format!("failed to create dir at {cur:?}"))?;
     }
 
-    File::create(&cur).with_context(|| format!("failed to create file at {cur:?}"))
+    Ok(cur)
+}
+
+pub(crate) fn create_file(path: &str) -> anyhow::Result<File> {
+    let adj = create_dirs_case_insentive(path)?;
+    File::create(&adj).with_context(|| format!("failed to create file at {adj:?}"))
+}
+
+fn create_dir(path: &str) -> anyhow::Result<()> {
+    let adj = create_dirs_case_insentive(path)?;
+    fs::create_dir(&adj).with_context(|| format!("failed to create dir at {adj:?}"))
 }
 
 fn main() -> anyhow::Result<()> {
