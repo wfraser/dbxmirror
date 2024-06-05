@@ -1,7 +1,7 @@
 use std::convert::identity;
 use std::path::Path;
 use anyhow::{anyhow, bail, Context};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 pub struct Database {
     sql: Connection,
@@ -34,6 +34,11 @@ impl Database {
             path TEXT PRIMARY KEY,\
             mtime INTEGER,\
             content_hash TEXT\
+        )", [])?;
+
+        sql.execute("CREATE TABLE IF NOT EXISTS ignores (\
+            path TEXT PRIMARY KEY,\
+            regex INTEGER\
         )", [])?;
 
         Ok(Self { sql })
@@ -94,5 +99,25 @@ impl Database {
     pub fn remove_file(&self, path: &str) -> anyhow::Result<()> {
         self.sql.execute("DELETE FROM files WHERE path = ?1", [path])?;
         Ok(())
+    }
+
+    pub fn add_ignore(&self, path: &str, regex: bool) -> anyhow::Result<()> {
+        self.sql.execute("INSERT INTO ignores (path, regex) VALUES (?1, ?2)", params![path, regex])?;
+        Ok(())
+    }
+
+    pub fn remove_ignore(&self, path: &str) -> anyhow::Result<()> {
+        self.sql.execute("DELETE FROM ignores WHERE path = ?1", [path])?;
+        if self.sql.changes() == 0 {
+            bail!("no matching ignore rule");
+        }
+        Ok(())
+    }
+
+    pub fn ignores(&self) -> anyhow::Result<Vec<(String, bool)>> {
+        let v = self.sql.prepare("SELECT path, regex FROM ignores ORDER BY path ASC")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(v)
     }
 }

@@ -55,8 +55,13 @@ enum Operation {
     ///
     /// Prompts for authentication interactively.
     Setup(SetupArgs),
+
+    /// View or change rules for paths to ignore.
+    #[command(subcommand)]
+    Ignore(IgnoreArgs),
 }
 
+#[clap_wrapper]
 #[derive(Debug, Clone, Parser)]
 struct SetupArgs {
     #[arg()]
@@ -67,11 +72,36 @@ struct SetupArgs {
     root_namespace_id: Option<String>,
 }
 
+#[clap_wrapper]
 #[derive(Debug, Clone, Parser)]
 struct PullArgs {
     /// Don't download any files, but do check existing local files.
     #[arg(long)]
     no_download: bool,
+}
+
+#[clap_wrapper]
+#[derive(Debug, Clone, Parser)]
+enum IgnoreArgs {
+    /// Add a path ignore rule.
+    Add {
+        /// Ignore paths under this.
+        #[arg()]
+        path: String,
+
+        /// Path should be taken to be a regular expression.
+        #[arg(long)]
+        regex: bool,
+    },
+
+    /// Show current ignore rules.
+    Show,
+
+    /// Remove the named rule.
+    Remove {
+        #[arg()]
+        path: String,
+    }
 }
 
 fn setup(args: SetupArgs) -> anyhow::Result<()> {
@@ -115,6 +145,33 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
 
     db.unset_config("cursor")?;
 
+    Ok(())
+}
+
+fn ignore(args: IgnoreArgs, db: &Database) -> anyhow::Result<()> {
+    match args {
+        IgnoreArgs::Add { path, regex } => {
+            db.add_ignore(&path, regex)?;
+        }
+        IgnoreArgs::Show => {
+            let (paths, regexes): (Vec<_>, Vec<_>) = db.ignores()?.into_iter().partition(|(_path, regex)| *regex);
+            if !paths.is_empty() {
+                println!("Path Matches:");
+                for (path, _) in paths {
+                    println!("\t{path}");
+                }
+            }
+            if !regexes.is_empty() {
+                println!("Regex Matches:");
+                for (regex, _) in regexes {
+                    println!("\t{regex}");
+                }
+            }
+        }
+        IgnoreArgs::Remove { path } => {
+            db.remove_ignore(&path)?;
+        }
+    }
     Ok(())
 }
 
@@ -363,6 +420,7 @@ fn main() -> anyhow::Result<()> {
     match args.op {
         Operation::Setup(_) => unreachable!(),
         Operation::Pull(pull_args) => pull(pull_args, &db)?,
+        Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
         _ => todo!("operation {:?}", args.op),
     }
 
