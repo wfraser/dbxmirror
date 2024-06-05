@@ -43,6 +43,10 @@ struct Args {
 struct CommonOptions {
     #[arg(short, long)]
     verbose: bool,
+
+    /// Don't sync with filesystem. Dangerous but very fast.
+    #[arg(long)]
+    turbo: bool,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -111,8 +115,8 @@ enum IgnoreArgs {
     }
 }
 
-fn setup(args: SetupArgs) -> anyhow::Result<()> {
-    let db = Database::open(DATABASE_PATH)?;
+fn setup(args: SetupArgs, common: &CommonOptions) -> anyhow::Result<()> {
+    let db = Database::open(DATABASE_PATH, common)?;
 
     if db.config_opt("auth")?.is_some() {
         bail!("this directory is already configured; remove {DATABASE_PATH} to setup again");
@@ -522,9 +526,9 @@ fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     let db = if let Operation::Setup(setup_args) = args.op {
-        return setup(setup_args);
+        return setup(setup_args, &args.common);
     } else {
-        Database::open(DATABASE_PATH)?
+        Database::open(DATABASE_PATH, &args.common)?
     };
 
     if db.config_opt("remote_path")?.is_none() {

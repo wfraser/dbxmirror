@@ -1,14 +1,15 @@
 use std::convert::identity;
 use std::path::Path;
 use anyhow::{anyhow, bail, Context};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, DatabaseName, OptionalExtension, params};
+use crate::CommonOptions;
 
 pub struct Database {
     sql: Connection,
 }
 
 impl Database {
-    pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub fn open(path: impl AsRef<Path>, opts: &CommonOptions) -> anyhow::Result<Self> {
         let sql = Connection::open(path.as_ref())
             .with_context(|| format!("failed to open {:?}", path.as_ref()))?;
 
@@ -40,6 +41,10 @@ impl Database {
             path TEXT PRIMARY KEY,\
             regex INTEGER\
         )", [])?;
+
+        if opts.turbo {
+            sql.pragma_update(Some(DatabaseName::Main), "synchronous", "OFF")?;
+        }
 
         Ok(Self { sql })
     }
