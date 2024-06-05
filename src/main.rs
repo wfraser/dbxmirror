@@ -321,6 +321,10 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                     }
                 }
                 Metadata::Deleted(_) => {
+                    if args.no_download {
+                        eprintln!("skipping delete of {path}");
+                        continue;
+                    }
                     match open_file(&path) {
                         Ok(Some(mut local)) => {
                             check_local_file(&path, &mut local, None, true, db)
