@@ -212,14 +212,7 @@ fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bo
 }
 
 fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
-    let remote_root = {
-        let p = db.config("remote_path")?;
-        if p == "/" {
-            String::new()
-        } else {
-            p
-        }
-    };
+    let mut remote_root = db.config("remote_path")?;
 
     let ignores = db.ignores()?;
 
@@ -230,6 +223,22 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     } else {
         None
     };
+
+    let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
+    let dl_tx = guard(dl_tx, |dl_tx| {
+        eprintln!("error occurred; waiting for in-flight downloads");
+        drop(dl_tx);
+        _ = complete_downloads(&dl_rx, db, true);
+    });
+
+    let mut downloaded_files = 0;
+    let mut downloaded_bytes = 0;
+    let mut would_download_files = vec![];
+
+    // Root folder "/" needs to be special-cased to "" for list operations.
+    if remote_root == "/" {
+        remote_root = String::new();
+    }
 
     let mut page = if let Some(cursor) = cursor {
         files::list_folder_continue(
@@ -244,17 +253,6 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                 .with_include_deleted(true))
             .combine()?
     };
-
-    let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
-    let dl_tx = guard(dl_tx, |dl_tx| {
-        eprintln!("error occurred; waiting for in-flight downloads");
-        drop(dl_tx);
-        _ = complete_downloads(&dl_rx, db, true);
-    });
-
-    let mut downloaded_files = 0;
-    let mut downloaded_bytes = 0;
-    let mut would_download_files = vec![];
 
     loop {
         'entries: for entry in page.entries {
