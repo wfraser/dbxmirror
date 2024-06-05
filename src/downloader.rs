@@ -1,4 +1,3 @@
-use std::fs::{self, File};
 use std::io;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -75,13 +74,7 @@ fn download(path: String, rev: String, mtime: i64, size: u64, base_path: &str, c
         .combine()?;
 
     let mut src = result.body.ok_or_else(|| anyhow!("missing body in API download result"))?;
-
-    if let Some((dir, _file)) = path.rsplit_once('/') {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("failed to create dirs {dir}"))?;
-    }
-
-    let mut dest = File::create(&path).context("failed to create local file")?;
+    let mut dest = crate::create_file(&path)?;
 
     let written = io::copy(&mut src, &mut dest).context("failed to copy")?;
 

@@ -4,6 +4,7 @@ mod downloader;
 use std::{fs, io};
 use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 use anyhow::{anyhow, bail, Context};
@@ -277,17 +278,17 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
             match entry {
                 Metadata::File(remote) => {
                     eprintln!("-> {path}");
-                    match fs::metadata(&path) {
-                        Ok(local) => {
+                    match open_file(&path) {
+                        Ok(Some(mut local)) => {
                             eprintln!("checking pre-existing local file");
-                            if check_local_file(&path, &local, Some(&remote), false, db)
+                            if check_local_file(&path, &mut local, Some(&remote), false, db)
                                 .with_context(|| format!("refusing to clobber local file {path}"))?
                             {
                                 eprintln!("local file is already up-to-date");
                                 continue;
                             }
                         }
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+                        Ok(None) => (),
                         Err(e) => {
                             return Err(e).with_context(|| format!("error checking metadata of local file {path}"));
                         }
@@ -316,15 +317,16 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                     }
                 }
                 Metadata::Deleted(_) => {
-                    match fs::metadata(&path) {
-                        Ok(local) => {
-                            check_local_file(&path, &local, None, true, db)
+                    match open_file(&path) {
+                        Ok(Some(mut local)) => {
+                            check_local_file(&path, &mut local, None, true, db)
                                 .with_context(|| format!("refusing to delete local file {path}"))?;
+                            drop(local);
                             fs::remove_file(&path)
                                 .with_context(|| format!("failed to remove local file {path}"))?;
                             db.remove_file(&path)?;
                         }
-                        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        Ok(None) => {
                             db.remove_file(&path)?;
                         }
                         Err(e) => {
@@ -379,9 +381,9 @@ fn check(db: &Database) -> anyhow::Result<()> {
         violations += 1;
         eprint!("{path}: ");
         io::stderr().flush().unwrap();
-        match fs::metadata(path) {
-            Ok(local) => {
-                match check_local_file(path, &local, None, true, db) {
+        match open_file(path) {
+            Ok(Some(mut local)) => {
+                match check_local_file(path, &mut local, None, true, db) {
                     Ok(_) => {
                         eprint!("\r{:width$}\r", "", width=path.len() + 1);
                         violations -= 1;
@@ -391,11 +393,11 @@ fn check(db: &Database) -> anyhow::Result<()> {
                     }
                 }
             }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            Ok(None) => {
                 eprintln!("local file not found");
             }
             Err(e) => {
-                eprintln!("failed to stat local file: {e}");
+                eprintln!("failed to open local file: {e}");
             }
         }
         Ok(())
@@ -404,17 +406,18 @@ fn check(db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn check_local_file(path: &str, local: &fs::Metadata, remote: Option<&FileMetadata>, hash_files: bool, db: &Database) -> anyhow::Result<bool> {
+fn check_local_file(path: &str, mut local: &mut File, remote: Option<&FileMetadata>, hash_files: bool, db: &Database) -> anyhow::Result<bool> {
     let local_content_hash = if hash_files {
         let mut h = ContentHash::new();
-        let f = File::open(path).context("failed to open local file")?;
-        h.read_stream(f).context("failed to hash local file")?;
+        h.read_stream(&mut local).context("failed to hash local file")?;
         h.finish_hex()
     } else {
         String::new()
     };
 
-    let local_mtime = local.modified()
+    let local_mtime = local.metadata()
+        .context("failed to stat")?
+        .modified()
         .context("failed to stat")?
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -465,6 +468,54 @@ fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
     }
 
     Ok(Arc::new(client))
+}
+
+fn open_file(path: &str) -> anyhow::Result<Option<File>> {
+    match File::open(path) {
+        Ok(f) => return Ok(Some(f)),
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+        _ => (), // continue to case-insentive lookup
+    }
+
+    let mut cur = PathBuf::from(".");
+
+    'component: for component in path.split('/') {
+        for entry in fs::read_dir(&cur).with_context(|| format!("unable to open dir {cur:?}"))? {
+            let entry = entry?;
+            if entry.file_name().eq_ignore_ascii_case(component) {
+                cur = entry.path();
+                continue 'component;
+            }
+        }
+        return Ok(None);
+    }
+
+    Ok(Some(File::open(&cur).with_context(|| format!("failed to open file {cur:?}"))?))
+}
+
+pub(crate) fn create_file(path: &str) -> anyhow::Result<File> {
+    let mut cur = PathBuf::from(".");
+
+    let mut it = path.split('/').peekable();
+    'component: while let Some(component) = it.next() {
+        if it.peek().is_none() {
+            cur.push(component);
+            break;
+        }
+
+        for entry in fs::read_dir(&cur).with_context(|| format!("unable to open dir {cur:?}"))? {
+            let entry = entry?;
+            if entry.file_name().eq_ignore_ascii_case(component) {
+                cur.push(entry.file_name());
+                continue 'component;
+            }
+        }
+
+        cur.push(component);
+        fs::create_dir(&cur).with_context(|| format!("failed to create dir at {cur:?}"))?;
+    }
+
+    File::create(&cur).with_context(|| format!("failed to create file at {cur:?}"))
 }
 
 fn main() -> anyhow::Result<()> {
