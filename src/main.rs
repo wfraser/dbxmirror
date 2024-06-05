@@ -330,6 +330,7 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                             check_local_file(&path, &mut local, None, true, db)
                                 .with_context(|| format!("refusing to delete local file {path}"))?;
                             drop(local);
+                            eprintln!("deleting {path}");
                             fs::remove_file(&path)
                                 .with_context(|| format!("failed to remove local file {path}"))?;
                             db.remove_file(&path)?;
@@ -428,22 +429,23 @@ fn check_local_file(path: &str, mut local: &mut File, remote: Option<&FileMetada
         .modified()
         .context("failed to stat")?
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
+        .map(|d| d.as_secs_f64().round() as i64)
         .unwrap_or_else(|e| -(e.duration().as_secs() as i64));
 
-    // First, check local file against existing database entry.
-    if let Some((db_mtime, db_content_hash)) = db.get_file(path)? {
+    // Check local file against existing database entry.
+    let db_match = if let Some((db_mtime, db_content_hash)) = db.get_file(path)? {
         if local_mtime != db_mtime {
             bail!("local file modification time mismatch with DB");
         }
         if !local_content_hash.is_empty() && local_content_hash != db_content_hash {
             bail!("local file hash mismatch with DB");
         }
-    } else if remote.is_none() {
-        bail!("refusing to clobber local file without database entry or remote metadata");
-    }
+        true
+    } else {
+        false
+    };
 
-    // If we have remote metadata, check it against that too.
+    // Check local file against remote metadata.
     if let Some(remote) = remote {
         let remote_mtime = OffsetDateTime::parse(
             &remote.client_modified,
@@ -454,13 +456,28 @@ fn check_local_file(path: &str, mut local: &mut File, remote: Option<&FileMetada
         if local_mtime == remote_mtime
             && (local_content_hash.is_empty() || local_content_hash == remote_content_hash)
         {
+            // Local file matches remote already; mark it in DB directly.
             db.set_file(path, remote_mtime, remote_content_hash)?;
-            return Ok(true);
+            Ok(true)
+        } else if db_match {
+            // File matches DB, but not remote. Ok to overwrite.
+            Ok(false)
+        } else {
+            // File doesn't have a DB entry, and does not match remote
+            eprintln!("  local mtime:  {local_mtime}");
+            eprintln!("  remote mtime: {remote_mtime} ({})", remote.client_modified);
+            Err(anyhow!("unknown local file, doesn't match remote metadata"))
+        }
+    } else {
+        // We have no remote metadata (i.e. are deleting or checking local DB)
+        if db_match {
+            // Local DB is okay
+            Ok(true)
+        } else {
+            // No local DB entry
+            Err(anyhow!("unknown local file, no remote metadata"))
         }
     }
-
-    // Ok to download and overwrite.
-    Ok(false)
 }
 
 fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
