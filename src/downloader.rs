@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::SystemTime;
 use anyhow::{anyhow, bail, Context};
@@ -9,6 +9,7 @@ use dropbox_toolbox::ResultExt;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use threadpool::ThreadPool;
 use time::Duration;
+use crate::output::OUT;
 
 pub struct Downloader {
     threads: ThreadPool,
@@ -24,6 +25,7 @@ pub struct DownloadRequest {
 
 pub struct DownloadResult {
     pub path: String,
+    pub size: u64,
     pub mtime: i64,
     pub content_hash: String,
     pub result: anyhow::Result<()>,
@@ -44,6 +46,7 @@ impl Downloader {
                 while let Ok(job) = jobs_rx.recv() {
                     let mut result = DownloadResult {
                         path: job.path.clone(),
+                        size: job.size,
                         mtime: job.mtime,
                         content_hash: job.content_hash.clone(),
                         result: Ok(()),
@@ -67,7 +70,7 @@ impl Downloader {
 }
 
 fn download(path: String, rev: String, mtime: i64, size: u64, base_path: &str, client: &UserAuthDefaultClient) -> anyhow::Result<()> {
-    eprintln!("downloading {path}");
+    OUT.get().unwrap().download_progress(&path, 0, size);
 
     let dl_path = base_path.to_owned() + &path;
     let result = files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None)
@@ -76,7 +79,18 @@ fn download(path: String, rev: String, mtime: i64, size: u64, base_path: &str, c
     let mut src = result.body.ok_or_else(|| anyhow!("missing body in API download result"))?;
     let mut dest = crate::create_file(&path)?;
 
-    let written = io::copy(&mut src, &mut dest).context("failed to copy")?;
+    // copy in chunks so we can update progress
+    let mut written = 0u64;
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let r = src.read(&mut buf).context("failed to read")?;
+        if r == 0 {
+            break;
+        }
+        dest.write_all(&buf[0..r]).context("failed to write")?;
+        written += r as u64;
+        OUT.get().unwrap().download_progress(&path, written, size);
+    }
 
     if written != size {
         bail!("written size ({written}) doesn't match expected size ({size})");

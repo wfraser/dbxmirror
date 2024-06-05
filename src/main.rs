@@ -1,5 +1,9 @@
 mod db;
 mod downloader;
+mod output;
+
+#[macro_use]
+extern crate log;
 
 use std::{fs, io};
 use std::cell::OnceCell;
@@ -23,6 +27,7 @@ use scopeguard::{guard, ScopeGuard};
 use time::OffsetDateTime;
 use crate::db::Database;
 use crate::downloader::{Downloader, DownloadRequest, DownloadResult};
+use crate::output::{OUT, Output};
 
 const DATABASE_PATH: &str = "./.dbxcli.db";
 
@@ -42,8 +47,13 @@ struct Args {
 #[clap_wrapper]
 #[derive(Debug, Parser)]
 struct CommonOptions {
+    /// Print DEBUG level messages from the program.
     #[arg(short, long)]
     verbose: bool,
+
+    /// Print DEBUG level messages from the program and its libraries.
+    #[arg(short, long)]
+    debug: bool,
 
     /// Don't sync with filesystem. Dangerous but very fast.
     #[arg(long)]
@@ -195,7 +205,7 @@ fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bo
         dl_rx.try_recv().map_err(|_| ())
     } {
         if let Err(e) = rx.result {
-            eprintln!("download error: {e:#}");
+            error!("download error: {e:#}");
             if result.is_ok() {
 
                 // Save the first error.
@@ -206,7 +216,7 @@ fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bo
             continue;
         }
 
-        eprintln!("completed {}", rx.path);
+        OUT.get().unwrap().download_progress(&rx.path, rx.size, rx.size);
         db.set_file(&rx.path, rx.mtime, &rx.content_hash)?;
     }
     result
@@ -227,7 +237,7 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
 
     let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
     let dl_tx = guard(dl_tx, |dl_tx| {
-        eprintln!("error occurred; waiting for in-flight downloads");
+        error!("error occurred; waiting for in-flight downloads");
         drop(dl_tx);
         _ = complete_downloads(&dl_rx, db, true);
     });
@@ -264,6 +274,10 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                 Metadata::Deleted(d) => d.path_display.as_ref(),
                 Metadata::Folder(f) => f.path_display.as_ref(),
             };
+            if path == Some(&remote_root) {
+                // This is an entry for the root itself.
+                continue;
+            }
             let path = path
                 .ok_or_else(|| anyhow!("missing path_display field from API"))?
                 .strip_prefix(&(remote_root.clone() + "/"))
@@ -280,14 +294,14 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
 
             match entry {
                 Metadata::File(remote) => {
-                    eprintln!("-> {path}");
+                    debug!("-> {path}");
                     match open_file(&path) {
                         Ok(Some(mut local)) => {
-                            eprintln!("checking pre-existing local file");
+                            debug!("checking pre-existing local file");
                             if check_local_file(&path, &mut local, Some(&remote), false, db)
                                 .with_context(|| format!("refusing to clobber local file {path}"))?
                             {
-                                eprintln!("local file is already up-to-date");
+                                debug!("local file is already up-to-date");
                                 continue;
                             }
                         }
@@ -321,19 +335,19 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                 }
                 Metadata::Folder(_) => {
                     // We don't store folders in the DB, but we can at least create them in the FS.
-                    eprintln!("-> [folder] {path}");
+                    debug!("-> [folder] {path}");
                     create_dir(&path)?;
                 }
                 Metadata::Deleted(_) => {
                     if args.no_download {
-                        eprintln!("skipping delete of {path}");
+                        info!("skipping delete of {path}");
                         continue;
                     }
                     match open_file(&path) {
                         Ok(Some(mut local)) => {
                             check_local_file(&path, &mut local, None, true, db)
                                 .with_context(|| format!("refusing to delete local file {path}"))?;
-                            eprintln!("deleting {path}");
+                            info!("deleting {path}");
                             if let Err(e) = fs::remove_file(&path)
                                 .with_context(|| format!("failed to remove local file {path}"))
                             {
@@ -372,20 +386,19 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     drop(ScopeGuard::into_inner(dl_tx));
 
     if downloaded_files > 0 {
-        eprintln!("waiting for downloads");
         complete_downloads(&dl_rx, db, true)?;
     }
 
-    eprintln!("{}downloaded {downloaded_bytes} bytes across {downloaded_files} files",
+    info!("{}downloaded {downloaded_bytes} bytes across {downloaded_files} files",
         if args.no_download { "would have " } else { "" }
     );
 
     if args.no_download && downloaded_files > 0 {
-        eprintln!("would have downloaded these files:");
+        info!("would have downloaded these files:");
         for file in would_download_files {
-            eprintln!("\t{file}");
+            info!("\t{file}");
         }
-        eprintln!("not updating cursor because some needed files were not downloaded");
+        info!("not updating cursor because some needed files were not downloaded");
     } else {
         db.set_config("cursor", &page.cursor)?;
     }
@@ -481,8 +494,6 @@ fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>,
             Ok(false)
         } else {
             // File doesn't have a DB entry, and does not match remote
-            eprintln!("  local mtime:  {local_mtime}");
-            eprintln!("  remote mtime: {remote_mtime} ({})", remote.client_modified);
             Err(anyhow!("unknown local file, doesn't match remote metadata"))
         }
     } else {
@@ -576,6 +587,8 @@ fn create_dir(path: &str) -> anyhow::Result<()> {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+
+    Output::init(&args.common);
 
     let db = if let Operation::Setup(setup_args) = args.op {
         return setup(setup_args, &args.common);
