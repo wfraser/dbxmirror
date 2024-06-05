@@ -492,7 +492,11 @@ fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>,
             Ok(true)
         } else {
             // No local DB entry
-            Err(anyhow!("unknown local file, no remote metadata"))
+            if local.metadata().map(|m| m.file_type().is_dir()).unwrap_or(false) {
+                Ok(false)
+            } else {
+                Err(anyhow!("unknown local file, no remote metadata"))
+            }
         }
     }
 }
