@@ -2,6 +2,7 @@ mod db;
 mod downloader;
 
 use std::{fs, io};
+use std::cell::OnceCell;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -425,13 +426,19 @@ fn check(db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn check_local_file(path: &str, mut local: &mut File, remote: Option<&FileMetadata>, hash_files: bool, db: &Database) -> anyhow::Result<bool> {
-    let local_content_hash = if hash_files {
+fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>, hash_files: bool, db: &Database) -> anyhow::Result<bool> {
+    let cached_hash = OnceCell::<String>::new();
+    let local_content_hash = |local: &mut File| -> anyhow::Result<&str> {
+        if !hash_files {
+            return Ok("");
+        }
+        if let Some(hash) = cached_hash.get().as_ref() {
+            return Ok(hash);
+        }
         let mut h = ContentHash::new();
-        h.read_stream(&mut local).context("failed to hash local file")?;
-        h.finish_hex()
-    } else {
-        String::new()
+        h.read_stream(local).context("failed to hash local file")?;
+        cached_hash.set(h.finish_hex()).unwrap();
+        Ok(cached_hash.get().unwrap().as_str())
     };
 
     let local_mtime = local.metadata()
@@ -447,7 +454,7 @@ fn check_local_file(path: &str, mut local: &mut File, remote: Option<&FileMetada
         if local_mtime != db_mtime {
             bail!("local file modification time mismatch with DB");
         }
-        if !local_content_hash.is_empty() && local_content_hash != db_content_hash {
+        if hash_files && local_content_hash(local)? != db_content_hash {
             bail!("local file hash mismatch with DB");
         }
         true
@@ -464,7 +471,7 @@ fn check_local_file(path: &str, mut local: &mut File, remote: Option<&FileMetada
         let remote_content_hash = remote.content_hash.as_deref().ok_or_else(|| anyhow!("missing content_hash"))?;
 
         if local_mtime == remote_mtime
-            && (local_content_hash.is_empty() || local_content_hash == remote_content_hash)
+            && (!hash_files || local_content_hash(local)? == remote_content_hash)
         {
             // Local file matches remote already; mark it in DB directly.
             db.set_file(path, remote_mtime, remote_content_hash)?;
