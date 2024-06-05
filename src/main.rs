@@ -154,7 +154,7 @@ fn ignore(args: IgnoreArgs, db: &Database) -> anyhow::Result<()> {
             db.add_ignore(&path, regex)?;
         }
         IgnoreArgs::Show => {
-            let (paths, regexes): (Vec<_>, Vec<_>) = db.ignores()?.into_iter().partition(|(_path, regex)| *regex);
+            let (regexes, paths): (Vec<_>, Vec<_>) = db.ignores()?.into_iter().partition(|(_path, regex)| *regex);
             if !paths.is_empty() {
                 println!("Path Matches:");
                 for (path, _) in paths {
@@ -210,6 +210,8 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
         }
     };
 
+    let ignores = db.ignores()?;
+
     let client = client(db)?;
 
     let mut page = if let Some(cursor) = db.config_opt("cursor")? {
@@ -237,7 +239,7 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     let mut downloaded_bytes = 0;
 
     loop {
-        for entry in page.entries {
+        'entries: for entry in page.entries {
             complete_downloads(&dl_rx, db, false)?;
 
             let path = match &entry {
@@ -250,6 +252,14 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                 .strip_prefix(&(remote_root.clone() + "/"))
                 .ok_or_else(|| anyhow!("remote path {:?} doesn't start with root path {:?}", path, remote_root))?
                 .to_owned();
+
+            for (test, regex) in &ignores {
+                if *regex {
+                    todo!("regex support");
+                } else if path.starts_with(test) {
+                    continue 'entries;
+                }
+            }
 
             match entry {
                 Metadata::File(remote) => {
