@@ -582,7 +582,11 @@ pub(crate) fn create_file(path: &str) -> anyhow::Result<File> {
 
 fn create_dir(path: &str) -> anyhow::Result<()> {
     let adj = create_dirs_case_insentive(path)?;
-    fs::create_dir(&adj).with_context(|| format!("failed to create dir at {adj:?}"))
+    match fs::create_dir(&adj) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("failed to create dir at {adj:?}")),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
