@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use crate::CommonOptions;
 use console::Term;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressFinish, ProgressStyle};
 use log::{Level, LevelFilter, Metadata, Record};
-use crate::CommonOptions;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 pub static OUT: OnceLock<Output> = OnceLock::new();
 
@@ -17,25 +17,21 @@ pub struct Output {
 impl Output {
     pub fn init(opts: &CommonOptions) {
         let out = Self {
-            mp: MultiProgress::with_draw_target(
-                ProgressDrawTarget::term(
-                    Term::stderr(),
-                    10,
-                )
-            ),
+            mp: MultiProgress::with_draw_target(ProgressDrawTarget::term(Term::stderr(), 10)),
             bars: Mutex::new(HashMap::new()),
-            overall: ProgressBar::hidden()
-                .with_style(
-                    ProgressStyle::with_template(
-                        "{decimal_bytes_per_sec} :: {decimal_bytes}/{decimal_total_bytes}")
-                        .unwrap()
-                    ),
+            overall: ProgressBar::hidden().with_style(
+                ProgressStyle::with_template(
+                    "{decimal_bytes_per_sec} :: {decimal_bytes}/{decimal_total_bytes}",
+                )
+                .unwrap(),
+            ),
             debug: opts.debug,
         };
 
         out.overall.set_length(0);
 
-        OUT.set(out).unwrap_or_else(|_| panic!("output has already been set"));
+        OUT.set(out)
+            .unwrap_or_else(|_| panic!("output has already been set"));
         log::set_logger(OUT.get().unwrap()).expect("logger has already been set");
 
         if opts.verbose || opts.debug {
@@ -95,11 +91,12 @@ impl log::Log for Output {
 
         let mut msg = match record.level() {
             Level::Error => console::style("ERROR").red(),
-            Level::Warn =>  console::style(" WARN").yellow(),
-            Level::Info =>  console::style(" INFO").green(),
+            Level::Warn => console::style(" WARN").yellow(),
+            Level::Info => console::style(" INFO").green(),
             Level::Debug => console::style("DEBUG").blue(),
             Level::Trace => console::style("TRACE").dim(),
-        }.to_string();
+        }
+        .to_string();
         msg.push_str(": ");
         msg.push_str(&format!("{}", record.args()));
         self.mp.println(&msg).unwrap();

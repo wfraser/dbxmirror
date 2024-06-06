@@ -5,13 +5,9 @@ mod output;
 #[macro_use]
 extern crate log;
 
-use std::{fs, io};
-use std::cell::OnceCell;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::SystemTime;
+use crate::db::Database;
+use crate::downloader::{DownloadRequest, DownloadResult, Downloader};
+use crate::output::{Output, OUT};
 use anyhow::{anyhow, bail, Context};
 use clap::Parser;
 use clap_wrapper::clap_wrapper;
@@ -19,15 +15,22 @@ use crossbeam_channel::Receiver;
 use dropbox_sdk::common::PathRoot;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
-use dropbox_sdk::files::{FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata};
+use dropbox_sdk::files::{
+    FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata,
+};
 use dropbox_sdk::oauth2::Authorization;
 use dropbox_toolbox::content_hash::ContentHash;
 use dropbox_toolbox::ResultExt;
 use scopeguard::{guard, ScopeGuard};
+use std::cell::OnceCell;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::SystemTime;
+use std::{fs, io};
+use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use crate::db::Database;
-use crate::downloader::{Downloader, DownloadRequest, DownloadResult};
-use crate::output::{OUT, Output};
 
 const DATABASE_PATH: &str = "./.dbxcli.db";
 
@@ -123,7 +126,7 @@ enum IgnoreArgs {
     Remove {
         #[arg()]
         path: String,
-    }
+    },
 }
 
 fn setup(args: SetupArgs, common: &CommonOptions) -> anyhow::Result<()> {
@@ -141,12 +144,14 @@ fn setup(args: SetupArgs, common: &CommonOptions) -> anyhow::Result<()> {
 
     if args.remote_path != "/" {
         let client = UserAuthDefaultClient::new(auth);
-        match files::get_metadata(&client, &GetMetadataArg::new(args.remote_path.clone()))
-            .combine()
+        match files::get_metadata(&client, &GetMetadataArg::new(args.remote_path.clone())).combine()
         {
             Ok(meta) => {
                 if matches!(meta, Metadata::File(_)) {
-                    bail!("Remote path {:?} refers to a file, not a folder.", args.remote_path);
+                    bail!(
+                        "Remote path {:?} refers to a file, not a folder.",
+                        args.remote_path
+                    );
                 }
             }
             Err(e) => {
@@ -176,7 +181,8 @@ fn ignore(args: IgnoreArgs, db: &Database) -> anyhow::Result<()> {
             db.add_ignore(&path, regex)?;
         }
         IgnoreArgs::Show => {
-            let (regexes, paths): (Vec<_>, Vec<_>) = db.ignores()?.into_iter().partition(|(_path, regex)| *regex);
+            let (regexes, paths): (Vec<_>, Vec<_>) =
+                db.ignores()?.into_iter().partition(|(_path, regex)| *regex);
             if !paths.is_empty() {
                 println!("Path Matches:");
                 for (path, _) in paths {
@@ -197,7 +203,11 @@ fn ignore(args: IgnoreArgs, db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bool) -> anyhow::Result<()> {
+fn complete_downloads(
+    dl_rx: &Receiver<DownloadResult>,
+    db: &Database,
+    block: bool,
+) -> anyhow::Result<()> {
     let mut result = Ok(());
     while let Ok(rx) = if block {
         dl_rx.recv().map_err(|_| ())
@@ -207,7 +217,6 @@ fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bo
         if let Err(e) = rx.result {
             error!("download error: {e:#}");
             if result.is_ok() {
-
                 // Save the first error.
                 result = Err(e);
             }
@@ -216,7 +225,9 @@ fn complete_downloads(dl_rx: &Receiver<DownloadResult>, db: &Database, block: bo
             continue;
         }
 
-        OUT.get().unwrap().download_progress(&rx.path, rx.size, rx.size);
+        OUT.get()
+            .unwrap()
+            .download_progress(&rx.path, rx.size, rx.size);
         db.set_file(&rx.path, rx.mtime, &rx.content_hash)?;
     }
     result
@@ -252,17 +263,16 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     }
 
     let mut page = if let Some(cursor) = cursor {
-        files::list_folder_continue(
-            client.as_ref(),
-            &ListFolderContinueArg::new(cursor))
+        files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))
             .combine()?
     } else {
         files::list_folder(
             client.as_ref(),
             &ListFolderArg::new(remote_root.clone())
                 .with_recursive(true)
-                .with_include_deleted(true))
-            .combine()?
+                .with_include_deleted(true),
+        )
+        .combine()?
     };
 
     loop {
@@ -281,7 +291,13 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
             let path = path
                 .ok_or_else(|| anyhow!("missing path_display field from API"))?
                 .strip_prefix(&(remote_root.clone() + "/"))
-                .ok_or_else(|| anyhow!("remote path {:?} doesn't start with root path {:?}", path, remote_root))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "remote path {:?} doesn't start with root path {:?}",
+                        path,
+                        remote_root
+                    )
+                })?
                 .to_owned();
 
             for (test, regex) in &ignores {
@@ -307,30 +323,35 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                         }
                         Ok(None) => (),
                         Err(e) => {
-                            return Err(e).with_context(|| format!("error checking metadata of local file {path}"));
+                            return Err(e).with_context(|| {
+                                format!("error checking metadata of local file {path}")
+                            });
                         }
                     }
 
-                    let mtime = time::OffsetDateTime::parse(
-                        &remote.client_modified,
-                        &time::format_description::well_known::Rfc3339
-                    )
-                        .with_context(|| format!("failed to parse timestamp {}", remote.client_modified))?
+                    let mtime = OffsetDateTime::parse(&remote.client_modified, &Rfc3339)
+                        .with_context(|| {
+                            format!("failed to parse timestamp {}", remote.client_modified)
+                        })?
                         .unix_timestamp();
-                    let content_hash = remote.content_hash.ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
+                    let content_hash = remote
+                        .content_hash
+                        .ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
 
                     downloaded_files += 1;
                     downloaded_bytes += remote.size;
                     if args.no_download {
                         would_download_files.push(path);
                     } else {
-                        dl_tx.send(DownloadRequest {
-                            path,
-                            rev: remote.rev,
-                            size: remote.size,
-                            mtime,
-                            content_hash,
-                        }).unwrap();
+                        dl_tx
+                            .send(DownloadRequest {
+                                path,
+                                rev: remote.rev,
+                                size: remote.size,
+                                mtime,
+                                content_hash,
+                            })
+                            .unwrap();
                     }
                 }
                 Metadata::Folder(_) => {
@@ -352,9 +373,14 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                                 .with_context(|| format!("failed to remove local file {path}"))
                             {
                                 // Is it a directory?
-                                if local.metadata().map(|m| m.file_type().is_dir()).unwrap_or(false) {
-                                    fs::remove_dir(&path)
-                                        .with_context(|| format!("failed to remove local directory {path}"))?;
+                                if local
+                                    .metadata()
+                                    .map(|m| m.file_type().is_dir())
+                                    .unwrap_or(false)
+                                {
+                                    fs::remove_dir(&path).with_context(|| {
+                                        format!("failed to remove local directory {path}")
+                                    })?;
                                 } else {
                                     return Err(e);
                                 }
@@ -365,7 +391,9 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                             db.remove_file(&path)?;
                         }
                         Err(e) => {
-                            return Err(e).with_context(|| format!("error checking metadata of local file {path}"));
+                            return Err(e).with_context(|| {
+                                format!("error checking metadata of local file {path}")
+                            });
                         }
                     }
                 }
@@ -376,10 +404,9 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
             break;
         }
 
-        page = files::list_folder_continue(
-            client.as_ref(),
-            &ListFolderContinueArg::new(page.cursor))
-            .combine()?;
+        page =
+            files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(page.cursor))
+                .combine()?;
     }
 
     // Defuse error handler.
@@ -389,7 +416,8 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
         complete_downloads(&dl_rx, db, true)?;
     }
 
-    info!("{}downloaded {downloaded_bytes} bytes across {downloaded_files} files",
+    info!(
+        "{}downloaded {downloaded_bytes} bytes across {downloaded_files} files",
         if args.no_download { "would have " } else { "" }
     );
 
@@ -415,17 +443,15 @@ fn check(db: &Database) -> anyhow::Result<()> {
         eprint!("{path}: ");
         io::stderr().flush().unwrap();
         match open_file(path) {
-            Ok(Some(mut local)) => {
-                match check_local_file(path, &mut local, None, true, db) {
-                    Ok(_) => {
-                        eprint!("\r{:width$}\r", "", width=path.len() + 1);
-                        violations -= 1;
-                    }
-                    Err(e) => {
-                        eprintln!("{e}");
-                    }
+            Ok(Some(mut local)) => match check_local_file(path, &mut local, None, true, db) {
+                Ok(_) => {
+                    eprint!("\r{:width$}\r", "", width = path.len() + 1);
+                    violations -= 1;
                 }
-            }
+                Err(e) => {
+                    eprintln!("{e}");
+                }
+            },
             Ok(None) => {
                 eprintln!("local file not found");
             }
@@ -439,7 +465,13 @@ fn check(db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>, hash_files: bool, db: &Database) -> anyhow::Result<bool> {
+fn check_local_file(
+    path: &str,
+    local: &mut File,
+    remote: Option<&FileMetadata>,
+    hash_files: bool,
+    db: &Database,
+) -> anyhow::Result<bool> {
     let cached_hash = OnceCell::<String>::new();
     let local_content_hash = |local: &mut File| -> anyhow::Result<&str> {
         if !hash_files {
@@ -454,7 +486,8 @@ fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>,
         Ok(cached_hash.get().unwrap().as_str())
     };
 
-    let local_mtime = local.metadata()
+    let local_mtime = local
+        .metadata()
         .context("failed to stat")?
         .modified()
         .context("failed to stat")?
@@ -477,11 +510,12 @@ fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>,
 
     // Check local file against remote metadata.
     if let Some(remote) = remote {
-        let remote_mtime = OffsetDateTime::parse(
-            &remote.client_modified,
-            &time::format_description::well_known::Rfc3339)?
-            .unix_timestamp();
-        let remote_content_hash = remote.content_hash.as_deref().ok_or_else(|| anyhow!("missing content_hash"))?;
+        let remote_mtime =
+            OffsetDateTime::parse(&remote.client_modified, &Rfc3339)?.unix_timestamp();
+        let remote_content_hash = remote
+            .content_hash
+            .as_deref()
+            .ok_or_else(|| anyhow!("missing content_hash"))?;
 
         if local_mtime == remote_mtime
             && (!hash_files || local_content_hash(local)? == remote_content_hash)
@@ -503,7 +537,11 @@ fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>,
             Ok(true)
         } else {
             // No local DB entry
-            if local.metadata().map(|m| m.file_type().is_dir()).unwrap_or(false) {
+            if local
+                .metadata()
+                .map(|m| m.file_type().is_dir())
+                .unwrap_or(false)
+            {
                 Ok(false)
             } else {
                 Err(anyhow!("unknown local file, no remote metadata"))
@@ -514,10 +552,8 @@ fn check_local_file(path: &str, local: &mut File, remote: Option<&FileMetadata>,
 
 fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
     let mut client = UserAuthDefaultClient::new(
-        Authorization::load(
-            db.config("client_id")?,
-            &db.config("auth")?,
-        ).ok_or_else(|| anyhow!("unable to load authorization from db"))?
+        Authorization::load(db.config("client_id")?, &db.config("auth")?)
+            .ok_or_else(|| anyhow!("unable to load authorization from db"))?,
     );
 
     if let Some(nsid) = db.config_opt("root_nsid")? {
@@ -547,7 +583,9 @@ fn open_file(path: &str) -> anyhow::Result<Option<File>> {
         return Ok(None);
     }
 
-    Ok(Some(File::open(&cur).with_context(|| format!("failed to open file {cur:?}"))?))
+    Ok(Some(
+        File::open(&cur).with_context(|| format!("failed to open file {cur:?}"))?,
+    ))
 }
 
 fn create_dirs_case_insentive(path: &str) -> anyhow::Result<PathBuf> {

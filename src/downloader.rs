@@ -1,15 +1,15 @@
-use std::io::{Read, Write};
-use std::sync::Arc;
-use std::time::SystemTime;
+use crate::output::OUT;
 use anyhow::{anyhow, bail, Context};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use dropbox_sdk::default_client::UserAuthDefaultClient;
 use dropbox_sdk::files;
 use dropbox_sdk::files::DownloadArg;
 use dropbox_toolbox::ResultExt;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use std::io::{Read, Write};
+use std::sync::Arc;
+use std::time::SystemTime;
 use threadpool::ThreadPool;
 use time::Duration;
-use crate::output::OUT;
 
 pub struct Downloader {
     threads: ThreadPool,
@@ -32,12 +32,15 @@ pub struct DownloadResult {
 }
 
 impl Downloader {
-    pub fn new(base_path: String, client: Arc<UserAuthDefaultClient>) -> (Self, Sender<DownloadRequest>, Receiver<DownloadResult>) {
+    pub fn new(
+        base_path: String,
+        client: Arc<UserAuthDefaultClient>,
+    ) -> (Self, Sender<DownloadRequest>, Receiver<DownloadResult>) {
         let (jobs_tx, jobs_rx) = unbounded::<DownloadRequest>();
         let (results_tx, results_rx) = unbounded::<DownloadResult>();
         let threads = ThreadPool::default();
 
-        for _ in 0 .. threads.max_count() {
+        for _ in 0..threads.max_count() {
             let jobs_rx = jobs_rx.clone();
             let results_tx = results_tx.clone();
             let base_path = base_path.clone();
@@ -52,7 +55,14 @@ impl Downloader {
                         result: Ok(()),
                     };
 
-                    if let Err(e) = download(job.path.clone(), job.rev.clone(), job.mtime, job.size, &base_path, client.as_ref()) {
+                    if let Err(e) = download(
+                        job.path.clone(),
+                        job.rev.clone(),
+                        job.mtime,
+                        job.size,
+                        &base_path,
+                        client.as_ref(),
+                    ) {
                         result.result = Err(e).context(format!("failed to download {}", job.path));
                     }
 
@@ -61,22 +71,27 @@ impl Downloader {
             });
         }
 
-        (
-            Self { threads },
-            jobs_tx,
-            results_rx,
-        )
+        (Self { threads }, jobs_tx, results_rx)
     }
 }
 
-fn download(path: String, rev: String, mtime: i64, size: u64, base_path: &str, client: &UserAuthDefaultClient) -> anyhow::Result<()> {
+fn download(
+    path: String,
+    rev: String,
+    mtime: i64,
+    size: u64,
+    base_path: &str,
+    client: &UserAuthDefaultClient,
+) -> anyhow::Result<()> {
     OUT.get().unwrap().download_progress(&path, 0, size);
 
     let dl_path = base_path.to_owned() + &path;
-    let result = files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None)
-        .combine()?;
+    let result =
+        files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None).combine()?;
 
-    let mut src = result.body.ok_or_else(|| anyhow!("missing body in API download result"))?;
+    let mut src = result
+        .body
+        .ok_or_else(|| anyhow!("missing body in API download result"))?;
     let mut dest = crate::create_file(&path)?;
 
     // copy in chunks so we can update progress
@@ -96,7 +111,8 @@ fn download(path: String, rev: String, mtime: i64, size: u64, base_path: &str, c
         bail!("written size ({written}) doesn't match expected size ({size})");
     }
 
-    dest.set_modified(SystemTime::UNIX_EPOCH + Duration::seconds(mtime)).context("failed to set mtime")?;
+    dest.set_modified(SystemTime::UNIX_EPOCH + Duration::seconds(mtime))
+        .context("failed to set mtime")?;
 
     Ok(())
 }
