@@ -1,0 +1,3 @@
+[submodule "dbxcase"]
+	path = dbxcase
+	url = git@github.com:wfraser/dbxcase.git

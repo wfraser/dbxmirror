@@ -191,7 +191,6 @@ checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 [[package]]
 name = "dbxcase"
 version = "0.1.0"
-source = "git+https://github.com/wfraser/dbxcase.git#d38637cf0a66296d9920ebfec0f8d25a0c16dcbb"
 dependencies = [
  "phf",
 ]
