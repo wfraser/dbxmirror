@@ -29,6 +29,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{fs, io};
+use std::ffi::OsString;
+use dbxcase::dbx_tolower;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -284,13 +286,13 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                 Metadata::Deleted(d) => d.path_display.as_ref(),
                 Metadata::Folder(f) => f.path_display.as_ref(),
             };
-            if path == Some(&remote_root) {
+            if path.map(|s| s.eq_ignore_case(&remote_root)).unwrap_or(false) {
                 // This is an entry for the root itself.
                 continue;
             }
             let path = path
                 .ok_or_else(|| anyhow!("missing path_display field from API"))?
-                .strip_prefix(&(remote_root.clone() + "/"))
+                .strip_prefix_case_insensitive(&(remote_root.clone() + "/"))
                 .ok_or_else(|| {
                     anyhow!(
                         "remote path {:?} doesn't start with root path {:?}",
@@ -575,7 +577,7 @@ fn open_file(path: &str) -> anyhow::Result<Option<File>> {
     'component: for component in path.split('/') {
         for entry in fs::read_dir(&cur).with_context(|| format!("unable to open dir {cur:?}"))? {
             let entry = entry?;
-            if entry.file_name().eq_ignore_ascii_case(component) {
+            if entry.file_name().eq_ignore_case(component) {
                 cur = entry.path();
                 continue 'component;
             }
@@ -600,7 +602,7 @@ fn create_dirs_case_insentive(path: &str) -> anyhow::Result<PathBuf> {
 
         for entry in fs::read_dir(&cur).with_context(|| format!("unable to open dir {cur:?}"))? {
             let entry = entry?;
-            if entry.file_name().eq_ignore_ascii_case(component) {
+            if entry.file_name().eq_ignore_case(component) {
                 cur.push(entry.file_name());
                 continue 'component;
             }
@@ -627,6 +629,41 @@ fn create_dir(path: &str) -> anyhow::Result<()> {
     }
 }
 
+trait StrExt {
+    fn strip_prefix_case_insensitive(&self, prefix: &str) -> Option<&'_ str>;
+    fn eq_ignore_case(&self, other: &str) -> bool;
+}
+
+impl StrExt for str {
+    fn strip_prefix_case_insensitive(&self, prefix: &str) -> Option<&'_ str> {
+        let mut pfx_it = prefix.chars().map(dbx_tolower);
+        let mut last = None;
+        let t = self.trim_start_matches(|c: char| {
+            last = pfx_it.next();
+            last == Some(dbx_tolower(c))
+        });
+        if last.is_some() {
+            None
+        } else {
+            Some(t)
+        }
+    }
+
+    fn eq_ignore_case(&self, other: &str) -> bool {
+        self.chars().map(dbx_tolower).eq(other.chars().map(dbx_tolower))
+    }
+}
+
+impl StrExt for OsString {
+    fn strip_prefix_case_insensitive(&self, prefix: &str) -> Option<&'_ str> {
+        self.to_str().and_then(|s| s.strip_prefix_case_insensitive(prefix))
+    }
+
+    fn eq_ignore_case(&self, other: &str) -> bool {
+        self.to_str().map(|s| s.eq_ignore_case(other)).unwrap_or(false)
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -650,4 +687,21 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::StrExt;
+
+    #[test]
+    fn test_strext() {
+        assert_eq!(Some("_SUFFIX"), "SİX_SUFFIX".strip_prefix_case_insensitive("six"));
+        assert_eq!(None, "ABC".strip_prefix_case_insensitive("abcd"));
+        assert_eq!(Some("ABC"), "ABC".strip_prefix_case_insensitive(""));
+        assert!("Ⓗİ THÉRE".eq_ignore_case("ⓗi thére"));
+        assert!(!"ABCD".eq_ignore_case("abcde"));
+        assert!("".eq_ignore_case(""));
+        assert!(!"x".eq_ignore_case(""));
+        assert!(!"".eq_ignore_case("x"));
+    }
 }
