@@ -1,5 +1,6 @@
-use crate::CommonOptions;
 use anyhow::{anyhow, bail, Context};
+use clap::Parser;
+use clap_wrapper::clap_wrapper;
 use rusqlite::{params, Connection, DatabaseName, OptionalExtension};
 use std::convert::identity;
 use std::path::Path;
@@ -8,8 +9,18 @@ pub struct Database {
     sql: Connection,
 }
 
+/// Database options
+#[clap_wrapper(prefix = "db")]
+#[derive(Clone, Debug, Parser)]
+pub struct DatabaseOpts {
+    /// Don't sync the database with the filesystem on each commit. Dangerous, but much faster if
+    /// you have a lot of changes.
+    #[arg(long)]
+    turbo: bool,
+}
+
 impl Database {
-    pub fn open(path: impl AsRef<Path>, opts: &CommonOptions) -> anyhow::Result<Self> {
+    pub fn open(path: impl AsRef<Path>, opts: &DatabaseOpts) -> anyhow::Result<Self> {
         let sql = Connection::open(path.as_ref())
             .with_context(|| format!("failed to open {:?}", path.as_ref()))?;
 

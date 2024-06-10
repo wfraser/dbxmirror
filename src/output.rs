@@ -81,7 +81,7 @@ impl Output {
 
 impl log::Log for Output {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        self.debug || metadata.level() <= Level::Warn || metadata.target().starts_with("dbxcli")
+        self.debug || metadata.level() <= Level::Warn || metadata.target().starts_with("dbxmirror")
     }
 
     fn log(&self, record: &Record) {

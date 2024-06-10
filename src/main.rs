@@ -5,7 +5,7 @@ mod output;
 #[macro_use]
 extern crate log;
 
-use crate::db::Database;
+use crate::db::{Database, DatabaseOpts};
 use crate::downloader::{DownloadRequest, DownloadResult, Downloader};
 use crate::output::{Output, OUT};
 use anyhow::{anyhow, bail, Context};
@@ -34,9 +34,11 @@ use dbxcase::dbx_tolower;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-const DATABASE_PATH: &str = "./.dbxcli.db";
+const DATABASE_PATH: &str = "./.dbxmirror.db";
 
-/// DBX CLI
+/// dbxmirror :: Dropbox Mirror
+///
+/// This program allows you to efficiently maintain a mirror of a Dropbox folder structure.
 #[clap_wrapper]
 #[derive(Debug, Parser)]
 #[command(version)]
@@ -46,6 +48,9 @@ struct Args {
 
     #[command(flatten)]
     common: CommonOptions,
+
+    #[command(flatten)]
+    db: DatabaseOpts,
 }
 
 /// Common options
@@ -59,10 +64,6 @@ struct CommonOptions {
     /// Print DEBUG level messages from the program and its libraries.
     #[arg(short, long)]
     debug: bool,
-
-    /// Don't sync with filesystem. Dangerous but very fast.
-    #[arg(long)]
-    turbo: bool,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -131,8 +132,8 @@ enum IgnoreArgs {
     },
 }
 
-fn setup(args: SetupArgs, common: &CommonOptions) -> anyhow::Result<()> {
-    let db = Database::open(DATABASE_PATH, common)?;
+fn setup(args: SetupArgs, db_opts: &DatabaseOpts) -> anyhow::Result<()> {
+    let db = Database::open(DATABASE_PATH, db_opts)?;
 
     if db.config_opt("auth")?.is_some() {
         bail!("this directory is already configured; remove {DATABASE_PATH} to setup again");
@@ -670,13 +671,13 @@ fn main() -> anyhow::Result<()> {
     Output::init(&args.common);
 
     let db = if let Operation::Setup(setup_args) = args.op {
-        return setup(setup_args, &args.common);
+        return setup(setup_args, &args.db);
     } else {
-        Database::open(DATABASE_PATH, &args.common)?
+        Database::open(DATABASE_PATH, &args.db)?
     };
 
     if db.config_opt("remote_path")?.is_none() {
-        bail!("Sync directory not set up yet. Please run 'dbxcli setup' first.");
+        bail!("Sync directory not set up yet. Please run 'dbxmirror setup' first.");
     }
 
     match args.op {

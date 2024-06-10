@@ -196,8 +196,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dbxcli"
-version = "0.1.0"
+name = "dbxmirror"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
