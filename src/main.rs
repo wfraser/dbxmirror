@@ -438,33 +438,34 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
 }
 
 fn check(db: &Database) -> anyhow::Result<()> {
+    println!("Hashing files...");
     let mut checks = 0;
     let mut violations = 0;
     db.for_files(|path| {
         checks += 1;
         violations += 1;
-        eprint!("{path}: ");
+        eprint!("{path}");
         io::stderr().flush().unwrap();
         match open_file(path) {
             Ok(Some(mut local)) => match check_local_file(path, &mut local, None, true, db) {
                 Ok(_) => {
-                    eprint!("\r{:width$}\r", "", width = path.len() + 1);
+                    eprint!("\r{:width$}\r", "", width = path.len());
                     violations -= 1;
                 }
                 Err(e) => {
-                    eprintln!("{e}");
+                    eprintln!(": {e}");
                 }
             },
             Ok(None) => {
-                eprintln!("local file not found");
+                eprintln!(": local file not found");
             }
             Err(e) => {
-                eprintln!("failed to open local file: {e}");
+                eprintln!(": failed to open local file: {e}");
             }
         }
         Ok(())
     })?;
-    eprintln!("{checks} checks, {violations} violations");
+    println!("{checks} checks, {violations} violations");
     Ok(())
 }
 
