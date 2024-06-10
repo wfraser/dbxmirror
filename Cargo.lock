@@ -243,7 +243,7 @@ dependencies = [
 [[package]]
 name = "dropbox-toolbox"
 version = "0.1.0"
-source = "git+https://github.com/wfraser/dropbox-toolbox.git#1ea0d417bf4ae2f7b73409a1c63f4bf0a2c95d08"
+source = "git+https://github.com/wfraser/dropbox-toolbox.git#64d959c225e85996859ed76c555d0e5fbdbbecd5"
 dependencies = [
  "dropbox-sdk",
  "log",
