@@ -611,7 +611,11 @@ fn create_dirs_case_insentive(path: &str) -> anyhow::Result<PathBuf> {
         }
 
         cur.push(component);
-        fs::create_dir(&cur).with_context(|| format!("failed to create dir at {cur:?}"))?;
+        match fs::create_dir(&cur) {
+            Ok(()) => (),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(e).context(format!("failed to create dir at {cur:?}")),
+        }
     }
 
     Ok(cur)
