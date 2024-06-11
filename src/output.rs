@@ -41,6 +41,10 @@ impl Output {
         }
     }
 
+    pub fn inc_total(&self, size: u64) {
+        self.overall.inc_length(size);
+    }
+
     pub fn download_progress(&self, path: &str, cur: u64, size: u64) {
         let mut bars = self.bars.lock().unwrap();
         if let Some(bar) = bars.get(path) {
@@ -53,7 +57,6 @@ impl Output {
             if bars.is_empty() {
                 self.mp.add(self.overall.clone());
             }
-            self.overall.inc_length(size);
             self.overall.inc(cur);
 
             let bar = ProgressBar::new(size)

@@ -346,6 +346,7 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
                     if args.no_download {
                         would_download_files.push(path);
                     } else {
+                        OUT.get().unwrap().inc_total(remote.size);
                         dl_tx
                             .send(DownloadRequest {
                                 path,
