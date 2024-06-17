@@ -2,17 +2,16 @@ use crate::output::OUT;
 use anyhow::{anyhow, bail, Context};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use dropbox_sdk::default_client::UserAuthDefaultClient;
-use dropbox_sdk::files;
-use dropbox_sdk::files::DownloadArg;
+use dropbox_sdk::files::{self, DownloadArg};
 use dropbox_toolbox::ResultExt;
 use std::io::{Read, Write};
 use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::SystemTime;
-use threadpool::ThreadPool;
 use time::Duration;
 
 pub struct Downloader {
-    threads: ThreadPool,
+    threads: Vec<JoinHandle<()>>,
 }
 
 pub struct DownloadRequest {
@@ -35,17 +34,18 @@ impl Downloader {
     pub fn new(
         base_path: String,
         client: Arc<UserAuthDefaultClient>,
+        parallel_downloads: usize,
     ) -> (Self, Sender<DownloadRequest>, Receiver<DownloadResult>) {
         let (jobs_tx, jobs_rx) = unbounded::<DownloadRequest>();
         let (results_tx, results_rx) = unbounded::<DownloadResult>();
-        let threads = ThreadPool::default();
+        let mut threads = vec![];
 
-        for _ in 0..threads.max_count() {
+        for _ in 0..parallel_downloads {
             let jobs_rx = jobs_rx.clone();
             let results_tx = results_tx.clone();
             let base_path = base_path.clone();
             let client = client.clone();
-            threads.execute(move || {
+            threads.push(thread::spawn(move || {
                 while let Ok(job) = jobs_rx.recv() {
                     let mut result = DownloadResult {
                         path: job.path.clone(),
@@ -68,7 +68,7 @@ impl Downloader {
 
                     results_tx.send(result).unwrap();
                 }
-            });
+            }));
         }
 
         (Self { threads }, jobs_tx, results_rx)
@@ -119,6 +119,8 @@ fn download(
 
 impl Drop for Downloader {
     fn drop(&mut self) {
-        self.threads.join();
+        for handle in self.threads.drain(..) {
+            handle.join().expect("downloader thread panicked");
+        }
     }
 }

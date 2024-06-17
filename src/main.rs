@@ -64,6 +64,10 @@ struct CommonOptions {
     /// Print DEBUG level messages from the program and its libraries.
     #[arg(short, long)]
     debug: bool,
+
+    /// Download up to this many files in parallel.
+    #[arg(long, default_value_t = 10)]
+    parallel_downloads: usize,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -87,6 +91,7 @@ enum Operation {
 #[clap_wrapper]
 #[derive(Debug, Clone, Parser)]
 struct SetupArgs {
+    /// The path to the root of the Dropbox subtree to mirror. Must begin with a slash.
     #[arg()]
     remote_path: String,
 
@@ -236,7 +241,7 @@ fn complete_downloads(
     result
 }
 
-fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
+fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow::Result<()> {
     let mut remote_root = db.config("remote_path")?;
 
     let ignores = db.ignores()?;
@@ -249,7 +254,11 @@ fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
         None
     };
 
-    let (_downloader, dl_tx, dl_rx) = Downloader::new(remote_root.clone(), client.clone());
+    let (_downloader, dl_tx, dl_rx) = Downloader::new(
+        remote_root.clone(),
+        client.clone(),
+        common_options.parallel_downloads,
+    );
     let dl_tx = guard(dl_tx, |dl_tx| {
         error!("error occurred; waiting for in-flight downloads");
         drop(dl_tx);
@@ -688,7 +697,7 @@ fn main() -> anyhow::Result<()> {
 
     match args.op {
         Operation::Setup(_) => unreachable!(),
-        Operation::Pull(pull_args) => pull(pull_args, &db)?,
+        Operation::Pull(pull_args) => pull(pull_args, args.common, &db)?,
         Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
         Operation::Check => check(&db)?,
     }

@@ -18,7 +18,6 @@ indicatif = "0.17.8"
 log = "0.4.21"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 scopeguard = "1.2.0"
-threadpool = "1.8.1"
 time = { version = "0.3.36", features = ["parsing"] }
 
 [patch.crates-io]
