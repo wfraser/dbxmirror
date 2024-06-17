@@ -12,6 +12,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use crossbeam_channel::Receiver;
+use dbxcase::dbx_tolower;
 use dropbox_sdk::common::PathRoot;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
@@ -23,14 +24,13 @@ use dropbox_toolbox::content_hash::ContentHash;
 use dropbox_toolbox::ResultExt;
 use scopeguard::{guard, ScopeGuard};
 use std::cell::OnceCell;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{fs, io};
-use std::ffi::OsString;
-use dbxcase::dbx_tolower;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -296,7 +296,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 Metadata::Deleted(d) => d.path_display.as_ref(),
                 Metadata::Folder(f) => f.path_display.as_ref(),
             };
-            if path.map(|s| s.eq_ignore_case(&remote_root)).unwrap_or(false) {
+            if path
+                .map(|s| s.eq_ignore_case(&remote_root))
+                .unwrap_or(false)
+            {
                 // This is an entry for the root itself.
                 continue;
             }
@@ -666,17 +669,22 @@ impl StrExt for str {
     }
 
     fn eq_ignore_case(&self, other: &str) -> bool {
-        self.chars().map(dbx_tolower).eq(other.chars().map(dbx_tolower))
+        self.chars()
+            .map(dbx_tolower)
+            .eq(other.chars().map(dbx_tolower))
     }
 }
 
 impl StrExt for OsString {
     fn strip_prefix_case_insensitive(&self, prefix: &str) -> Option<&'_ str> {
-        self.to_str().and_then(|s| s.strip_prefix_case_insensitive(prefix))
+        self.to_str()
+            .and_then(|s| s.strip_prefix_case_insensitive(prefix))
     }
 
     fn eq_ignore_case(&self, other: &str) -> bool {
-        self.to_str().map(|s| s.eq_ignore_case(other)).unwrap_or(false)
+        self.to_str()
+            .map(|s| s.eq_ignore_case(other))
+            .unwrap_or(false)
     }
 }
 
@@ -711,7 +719,10 @@ mod test {
 
     #[test]
     fn test_strext() {
-        assert_eq!(Some("_SUFFIX"), "SİX_SUFFIX".strip_prefix_case_insensitive("six"));
+        assert_eq!(
+            Some("_SUFFIX"),
+            "SİX_SUFFIX".strip_prefix_case_insensitive("six")
+        );
         assert_eq!(None, "ABC".strip_prefix_case_insensitive("abcd"));
         assert_eq!(Some("ABC"), "ABC".strip_prefix_case_insensitive(""));
         assert!("Ⓗİ THÉRE".eq_ignore_case("ⓗi thére"));
