@@ -233,9 +233,7 @@ fn complete_downloads(
             continue;
         }
 
-        OUT.get()
-            .unwrap()
-            .download_progress(&rx.path, rx.size, rx.size);
+        OUT.get().unwrap().remove_bar(&rx.path);
         db.set_file(&rx.path, rx.mtime, &rx.content_hash)?;
     }
     result
