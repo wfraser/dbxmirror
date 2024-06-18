@@ -24,7 +24,6 @@ pub struct DownloadRequest {
 
 pub struct DownloadResult {
     pub path: String,
-    pub size: u64,
     pub mtime: i64,
     pub content_hash: String,
     pub result: anyhow::Result<()>,
@@ -49,7 +48,6 @@ impl Downloader {
                 while let Ok(job) = jobs_rx.recv() {
                     let mut result = DownloadResult {
                         path: job.path.clone(),
-                        size: job.size,
                         mtime: job.mtime,
                         content_hash: job.content_hash.clone(),
                         result: Ok(()),
