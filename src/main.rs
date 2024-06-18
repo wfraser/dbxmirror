@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Context};
 use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use crossbeam_channel::Receiver;
-use dbxcase::dbx_tolower;
+use dbxcase::{dbx_eq_ignore_case, dbx_strip_prefix_ignore_case};
 use dropbox_sdk::common::PathRoot;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
@@ -303,7 +303,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             }
             let path = path
                 .ok_or_else(|| anyhow!("missing path_display field from API"))?
-                .strip_prefix_case_insensitive(&(remote_root.clone() + "/"))
+                .strip_prefix_ignore_case(&(remote_root.clone() + "/"))
                 .ok_or_else(|| {
                     anyhow!(
                         "remote path {:?} doesn't start with root path {:?}",
@@ -647,36 +647,24 @@ fn create_dir(path: &str) -> anyhow::Result<()> {
 }
 
 trait StrExt {
-    fn strip_prefix_case_insensitive(&self, prefix: &str) -> Option<&'_ str>;
+    fn strip_prefix_ignore_case(&self, prefix: &str) -> Option<&'_ str>;
     fn eq_ignore_case(&self, other: &str) -> bool;
 }
 
 impl StrExt for str {
-    fn strip_prefix_case_insensitive(&self, prefix: &str) -> Option<&'_ str> {
-        let mut pfx_it = prefix.chars().map(dbx_tolower);
-        let mut last = None;
-        let t = self.trim_start_matches(|c: char| {
-            last = pfx_it.next();
-            last == Some(dbx_tolower(c))
-        });
-        if last.is_some() {
-            None
-        } else {
-            Some(t)
-        }
+    fn strip_prefix_ignore_case(&self, prefix: &str) -> Option<&'_ str> {
+        dbx_strip_prefix_ignore_case(self, prefix)
     }
 
     fn eq_ignore_case(&self, other: &str) -> bool {
-        self.chars()
-            .map(dbx_tolower)
-            .eq(other.chars().map(dbx_tolower))
+        dbx_eq_ignore_case(self, other)
     }
 }
 
 impl StrExt for OsString {
-    fn strip_prefix_case_insensitive(&self, prefix: &str) -> Option<&'_ str> {
+    fn strip_prefix_ignore_case(&self, prefix: &str) -> Option<&'_ str> {
         self.to_str()
-            .and_then(|s| s.strip_prefix_case_insensitive(prefix))
+            .and_then(|s| s.strip_prefix_ignore_case(prefix))
     }
 
     fn eq_ignore_case(&self, other: &str) -> bool {
@@ -719,10 +707,10 @@ mod test {
     fn test_strext() {
         assert_eq!(
             Some("_SUFFIX"),
-            "SİX_SUFFIX".strip_prefix_case_insensitive("six")
+            "SİX_SUFFIX".strip_prefix_ignore_case("six")
         );
-        assert_eq!(None, "ABC".strip_prefix_case_insensitive("abcd"));
-        assert_eq!(Some("ABC"), "ABC".strip_prefix_case_insensitive(""));
+        assert_eq!(None, "ABC".strip_prefix_ignore_case("abcd"));
+        assert_eq!(Some("ABC"), "ABC".strip_prefix_ignore_case(""));
         assert!("Ⓗİ THÉRE".eq_ignore_case("ⓗi thére"));
         assert!(!"ABCD".eq_ignore_case("abcde"));
         assert!("".eq_ignore_case(""));
