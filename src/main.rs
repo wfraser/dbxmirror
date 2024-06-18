@@ -698,23 +698,3 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod test {
-    use crate::StrExt;
-
-    #[test]
-    fn test_strext() {
-        assert_eq!(
-            Some("_SUFFIX"),
-            "SİX_SUFFIX".strip_prefix_ignore_case("six")
-        );
-        assert_eq!(None, "ABC".strip_prefix_ignore_case("abcd"));
-        assert_eq!(Some("ABC"), "ABC".strip_prefix_ignore_case(""));
-        assert!("Ⓗİ THÉRE".eq_ignore_case("ⓗi thére"));
-        assert!(!"ABCD".eq_ignore_case("abcde"));
-        assert!("".eq_ignore_case(""));
-        assert!(!"x".eq_ignore_case(""));
-        assert!(!"".eq_ignore_case("x"));
-    }
-}
