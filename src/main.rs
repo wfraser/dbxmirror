@@ -229,11 +229,12 @@ fn complete_downloads(
                 result = Err(e);
             }
 
+            OUT.get().unwrap().remove_bar(&rx.path);
+
             // Complete any other pending finished downloads.
             continue;
         }
 
-        OUT.get().unwrap().remove_bar(&rx.path);
         db.set_file(&rx.path, rx.mtime, &rx.content_hash)?;
     }
     result

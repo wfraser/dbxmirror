@@ -1,31 +1,42 @@
 use crate::CommonOptions;
 use console::Term;
 use hashbrown::HashMap;
-use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressFinish, ProgressStyle};
+use indicatif::{InMemoryTerm, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressFinish, ProgressStyle, TermLike};
 use log::{Level, LevelFilter, Metadata, Record};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Relaxed;
 
 pub static OUT: OnceLock<Output> = OnceLock::new();
 
 pub struct Output {
+    term: Term,
     mp: MultiProgress,
     bars: Mutex<HashMap<String, ProgressBar>>,
     overall: ProgressBar,
     debug: bool,
+    total_files: AtomicUsize,
+    finished_files: AtomicUsize,
+}
+
+fn bar_style() -> ProgressStyle {
+    ProgressStyle::with_template("{wide_msg} {decimal_total_bytes:>11} {decimal_bytes_per_sec:>11} {eta:>4} [{bar}] {percent:>3}%")
+        .unwrap()
+        .progress_chars("=> ")
 }
 
 impl Output {
     pub fn init(opts: &CommonOptions) {
+        let term = Term::stderr();
+
         let out = Self {
-            mp: MultiProgress::with_draw_target(ProgressDrawTarget::term(Term::stderr(), 10)),
+            term: term.clone(),
+            mp: MultiProgress::with_draw_target(ProgressDrawTarget::term(term, 10)),
             bars: Mutex::new(HashMap::new()),
-            overall: ProgressBar::hidden().with_style(
-                ProgressStyle::with_template(
-                    "{decimal_bytes_per_sec} :: {decimal_bytes}/{decimal_total_bytes}",
-                )
-                .unwrap(),
-            ),
+            overall: ProgressBar::hidden().with_style(bar_style()),
             debug: opts.debug,
+            total_files: AtomicUsize::new(0),
+            finished_files: AtomicUsize::new(0),
         };
 
         out.overall.set_length(0);
@@ -43,6 +54,9 @@ impl Output {
 
     /// Add to the total expected size of all downloads.
     pub fn inc_total(&self, size: u64) {
+        let total = self.total_files.fetch_add(1, Relaxed) + 1;
+        let finished = self.finished_files.load(Relaxed);
+        self.overall.set_message(format!("Total ({finished}/{total})"));
         self.overall.inc_length(size);
     }
 
@@ -65,12 +79,7 @@ impl Output {
             .entry_ref(path)
             .or_insert_with(|| {
                 let bar = ProgressBar::new(size)
-                    .with_style(
-                        ProgressStyle::with_template(
-                            "[{bar:25}] {decimal_bytes}/{decimal_total_bytes} ({decimal_bytes_per_sec}) {wide_msg}")
-                            .unwrap()
-                            .progress_chars("=> "),
-                    )
+                    .with_style(bar_style())
                     .with_message(path.to_owned())
                     .with_finish(ProgressFinish::AndClear);
                 self.mp.insert_from_back(1, bar.clone());
@@ -81,19 +90,34 @@ impl Output {
         bar.set_position(cur);
 
         if cur == size {
-            self.mp.println(path).unwrap();
-            bars.remove(path).unwrap();
-            if bars.is_empty() {
-                self.mp.remove(&self.overall);
-            }
+            self.finish_file(bars, path);
         }
     }
 
     /// Remove the progress bar for a path regardless of whether it's finished or not.
     /// Use this in case there's an error or something which will prevent it from completing.
     pub fn remove_bar(&self, path: &str) {
-        let mut bars = self.bars.lock().unwrap();
-        bars.remove(path);
+        let bars = self.bars.lock().unwrap();
+        self.finish_file(bars, path);
+    }
+
+    fn finish_file(&self, mut bars: MutexGuard<HashMap<String, ProgressBar>>, path: &str) {
+        let Some(bar) = bars.remove(path) else { return };
+
+        // Unfortunately, abandoned bars get left where they are in the order, with all prints going
+        // above them, and other active bars staying above or below them, so we have to resort to
+        // shenanigans.
+
+        // Unlink the bar from the multi bar draw target, render it to a fake one instead, then emit
+        // it as a println so it stays in place.
+        let fake = InMemoryTerm::new(self.term.height(), self.term.width());
+        bar.set_draw_target(ProgressDrawTarget::term_like(Box::new(fake.clone())));
+        bar.abandon();
+        self.mp.println(fake.contents()).unwrap();
+
+        let total = self.total_files.load(Relaxed);
+        let finished = self.finished_files.fetch_add(1, Relaxed) + 1;
+        self.overall.set_message(format!("Total ({finished}/{total})"));
         if bars.is_empty() {
             self.mp.remove(&self.overall);
         }

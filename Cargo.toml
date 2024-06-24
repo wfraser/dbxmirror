@@ -1,6 +1,6 @@
 [package]
 name = "dbxmirror"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -15,7 +15,7 @@ dbxcase = { git = "https://github.com/wfraser/dbxcase.git" }
 dropbox-sdk = { version = "*", default-features = false }
 dropbox-toolbox = { git = "https://github.com/wfraser/dropbox-toolbox.git", version = "0.1.0" }
 hashbrown = "0.14.5"
-indicatif = "0.17.8"
+indicatif = { version = "0.17.8", features = ["in_memory"] }
 log = "0.4.21"
 rusqlite = { version = "0.31.0", features = ["bundled"] }
 scopeguard = "1.2.0"
