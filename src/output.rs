@@ -113,7 +113,15 @@ impl Output {
         let fake = InMemoryTerm::new(self.term.height(), self.term.width());
         bar.set_draw_target(ProgressDrawTarget::term_like(Box::new(fake.clone())));
         bar.abandon();
-        self.mp.println(fake.contents()).unwrap();
+
+        let mut txt = fake.contents();
+        let path_len = prefix_len(&txt, path);
+        if path_len < path.len() {
+            // Path got truncated; print the whole path, followed by the bar on a new line with the
+            // path there replaced with spaces.
+            txt = path.to_owned() + "\n" + &" ".repeat(path_len) + &txt[path_len..];
+        }
+        self.mp.println(txt).unwrap();
 
         let total = self.total_files.load(Relaxed);
         let finished = self.finished_files.fetch_add(1, Relaxed) + 1;
@@ -148,4 +156,30 @@ impl log::Log for Output {
     }
 
     fn flush(&self) {}
+}
+
+fn prefix_len(s: &str, prefix: &str) -> usize {
+    let mut pfx_it = prefix.chars();
+    match s.find(|c: char| {
+        match pfx_it.next() {
+            Some(pc) => c != pc,
+            None => true,
+        }
+    }) {
+        Some(pos) => pos,
+        None => s.len(),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_prefix_len() {
+        assert_eq!(prefix_len("abc", "abc"), 3);
+        assert_eq!(prefix_len("abcd", "abc"), 3);
+        assert_eq!(prefix_len("abcd", "xyz"), 0);
+        assert_eq!(prefix_len("abc", "abcd"), 3);
+    }
 }
