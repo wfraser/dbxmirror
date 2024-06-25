@@ -1,11 +1,14 @@
 use crate::CommonOptions;
 use console::Term;
 use hashbrown::HashMap;
-use indicatif::{InMemoryTerm, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressFinish, ProgressStyle, TermLike};
+use indicatif::{
+    InMemoryTerm, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressFinish, ProgressStyle,
+    TermLike,
+};
 use log::{Level, LevelFilter, Metadata, Record};
-use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub static OUT: OnceLock<Output> = OnceLock::new();
 
@@ -56,7 +59,8 @@ impl Output {
     pub fn inc_total(&self, size: u64) {
         let total = self.total_files.fetch_add(1, Relaxed) + 1;
         let finished = self.finished_files.load(Relaxed);
-        self.overall.set_message(format!("Total ({finished}/{total})"));
+        self.overall
+            .set_message(format!("Total ({finished}/{total})"));
         self.overall.inc_length(size);
     }
 
@@ -75,16 +79,14 @@ impl Output {
             self.mp.add(self.overall.clone());
         }
 
-        let bar = bars
-            .entry_ref(path)
-            .or_insert_with(|| {
-                let bar = ProgressBar::new(size)
-                    .with_style(bar_style())
-                    .with_message(path.to_owned())
-                    .with_finish(ProgressFinish::AndClear);
-                self.mp.insert_from_back(1, bar.clone());
-                bar
-            });
+        let bar = bars.entry_ref(path).or_insert_with(|| {
+            let bar = ProgressBar::new(size)
+                .with_style(bar_style())
+                .with_message(path.to_owned())
+                .with_finish(ProgressFinish::AndClear);
+            self.mp.insert_from_back(1, bar.clone());
+            bar
+        });
 
         self.overall.inc(cur - bar.position());
         bar.set_position(cur);
@@ -125,7 +127,8 @@ impl Output {
 
         let total = self.total_files.load(Relaxed);
         let finished = self.finished_files.fetch_add(1, Relaxed) + 1;
-        self.overall.set_message(format!("Total ({finished}/{total})"));
+        self.overall
+            .set_message(format!("Total ({finished}/{total})"));
         if bars.is_empty() {
             self.mp.remove(&self.overall);
         }
@@ -160,11 +163,9 @@ impl log::Log for Output {
 
 fn prefix_len(s: &str, prefix: &str) -> usize {
     let mut pfx_it = prefix.chars();
-    match s.find(|c: char| {
-        match pfx_it.next() {
-            Some(pc) => c != pc,
-            None => true,
-        }
+    match s.find(|c: char| match pfx_it.next() {
+        Some(pc) => c != pc,
+        None => true,
     }) {
         Some(pos) => pos,
         None => s.len(),

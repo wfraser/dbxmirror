@@ -13,6 +13,7 @@ use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use crossbeam_channel::Receiver;
 use dbxcase::{dbx_eq_ignore_case, dbx_strip_prefix_ignore_case};
+use dropbox_content_hasher::DropboxContentHasher;
 use dropbox_sdk::common::PathRoot;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files;
@@ -20,8 +21,6 @@ use dropbox_sdk::files::{
     FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata,
 };
 use dropbox_sdk::oauth2::Authorization;
-use dropbox_toolbox::content_hash::ContentHash;
-use dropbox_toolbox::ResultExt;
 use scopeguard::{guard, ScopeGuard};
 use std::cell::OnceCell;
 use std::ffi::OsString;
@@ -152,19 +151,15 @@ fn setup(args: SetupArgs, db_opts: &DatabaseOpts) -> anyhow::Result<()> {
 
     if args.remote_path != "/" {
         let client = UserAuthDefaultClient::new(auth);
-        match files::get_metadata(&client, &GetMetadataArg::new(args.remote_path.clone())).combine()
-        {
-            Ok(meta) => {
-                if matches!(meta, Metadata::File(_)) {
-                    bail!(
-                        "Remote path {:?} refers to a file, not a folder.",
-                        args.remote_path
-                    );
-                }
-            }
-            Err(e) => {
-                bail!("Failed to look up remote path {:?}: {e}", args.remote_path);
-            }
+        let meta = files::get_metadata(&client, &GetMetadataArg::new(args.remote_path.clone()))
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r.map_err(Into::into))
+            .with_context(|| format!("Failed to look up remote path {:?}", args.remote_path))?;
+        if matches!(meta, Metadata::File(_)) {
+            bail!(
+                "Remote path {:?} refers to a file, not a folder.",
+                args.remote_path
+            );
         }
     }
 
@@ -274,16 +269,14 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     }
 
     let mut page = if let Some(cursor) = cursor {
-        files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))
-            .combine()?
+        files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))??
     } else {
         files::list_folder(
             client.as_ref(),
             &ListFolderArg::new(remote_root.clone())
                 .with_recursive(true)
                 .with_include_deleted(true),
-        )
-        .combine()?
+        )??
     };
 
     loop {
@@ -385,9 +378,9 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             check_local_file(&path, &mut local, None, true, db)
                                 .with_context(|| format!("refusing to delete local file {path}"))?;
                             info!("deleting {actual_file_path:?}");
-                            if let Err(e) = fs::remove_file(&actual_file_path)
-                                .with_context(|| format!("failed to remove local file {actual_file_path:?}"))
-                            {
+                            if let Err(e) = fs::remove_file(&actual_file_path).with_context(|| {
+                                format!("failed to remove local file {actual_file_path:?}")
+                            }) {
                                 // Is it a directory?
                                 if local
                                     .metadata()
@@ -420,9 +413,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             break;
         }
 
-        page =
-            files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(page.cursor))
-                .combine()?;
+        page = files::list_folder_continue(
+            client.as_ref(),
+            &ListFolderContinueArg::new(page.cursor),
+        )??;
     }
 
     // Defuse error handler.
@@ -497,9 +491,8 @@ fn check_local_file(
         if let Some(hash) = cached_hash.get().as_ref() {
             return Ok(hash);
         }
-        let mut h = ContentHash::new();
-        h.read_stream(local).context("failed to hash local file")?;
-        cached_hash.set(h.finish_hex()).unwrap();
+        let h = DropboxContentHasher::hash_reader(local).context("failed to hash local file")?;
+        cached_hash.set(format!("{:x}", h)).unwrap();
         Ok(cached_hash.get().unwrap().as_str())
     };
 

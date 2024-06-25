@@ -3,7 +3,6 @@ use anyhow::{anyhow, bail, Context};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use dropbox_sdk::default_client::UserAuthDefaultClient;
 use dropbox_sdk::files::{self, DownloadArg};
-use dropbox_toolbox::ResultExt;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -84,8 +83,7 @@ fn download(
     OUT.get().unwrap().download_progress(&path, 0, size);
 
     let dl_path = base_path.to_owned() + &path;
-    let result =
-        files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None).combine()?;
+    let result = files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None)??;
 
     let mut src = result
         .body
