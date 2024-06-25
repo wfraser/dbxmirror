@@ -326,7 +326,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 Metadata::File(remote) => {
                     debug!("-> {path}");
                     match open_file(&path) {
-                        Ok(Some(mut local)) => {
+                        Ok(Some((mut local, _))) => {
                             debug!("checking pre-existing local file");
                             if check_local_file(&path, &mut local, Some(&remote), false, db)
                                 .with_context(|| format!("refusing to clobber local file {path}"))?
@@ -375,17 +375,18 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     create_dir(&path)?;
                 }
                 Metadata::Deleted(_) => {
+                    debug!("-> [delete] {path}");
                     if args.no_download {
                         info!("skipping delete of {path}");
                         continue;
                     }
                     match open_file(&path) {
-                        Ok(Some(mut local)) => {
+                        Ok(Some((mut local, actual_file_path))) => {
                             check_local_file(&path, &mut local, None, true, db)
                                 .with_context(|| format!("refusing to delete local file {path}"))?;
-                            info!("deleting {path}");
-                            if let Err(e) = fs::remove_file(&path)
-                                .with_context(|| format!("failed to remove local file {path}"))
+                            info!("deleting {actual_file_path:?}");
+                            if let Err(e) = fs::remove_file(&actual_file_path)
+                                .with_context(|| format!("failed to remove local file {actual_file_path:?}"))
                             {
                                 // Is it a directory?
                                 if local
@@ -459,7 +460,7 @@ fn check(db: &Database) -> anyhow::Result<()> {
         eprint!("{path}");
         io::stderr().flush().unwrap();
         match open_file(path) {
-            Ok(Some(mut local)) => match check_local_file(path, &mut local, None, true, db) {
+            Ok(Some((mut local, _))) => match check_local_file(path, &mut local, None, true, db) {
                 Ok(_) => {
                     eprint!("\r{:width$}\r", "", width = path.len());
                     violations -= 1;
@@ -579,9 +580,9 @@ fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
     Ok(Arc::new(client))
 }
 
-fn open_file(path: &str) -> anyhow::Result<Option<File>> {
+fn open_file(path: &str) -> anyhow::Result<Option<(File, PathBuf)>> {
     match File::open(path) {
-        Ok(f) => return Ok(Some(f)),
+        Ok(f) => return Ok(Some((f, path.into()))),
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
         _ => (), // continue to case-insentive lookup
     }
@@ -599,9 +600,10 @@ fn open_file(path: &str) -> anyhow::Result<Option<File>> {
         return Ok(None);
     }
 
-    Ok(Some(
+    Ok(Some((
         File::open(&cur).with_context(|| format!("failed to open file {cur:?}"))?,
-    ))
+        cur,
+    )))
 }
 
 fn create_dirs_case_insentive(path: &str) -> anyhow::Result<PathBuf> {
