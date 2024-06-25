@@ -545,6 +545,14 @@ fn check_local_file(
             Ok(false)
         } else {
             // File doesn't have a DB entry, and does not match remote
+            debug!(" local mtime: {local_mtime}");
+            debug!("remote mtime: {remote_mtime}");
+            if hash_files {
+                debug!(" local hash: {:?}", local_content_hash(local));
+                debug!("remote hash: {}", remote_content_hash);
+            } else {
+                debug!("hashing disabled");
+            }
             Err(anyhow!("unknown local file, doesn't match remote metadata"))
         }
     } else {
