@@ -83,7 +83,7 @@ fn download(
     OUT.get().unwrap().download_progress(&path, 0, size);
 
     let dl_path = base_path.to_owned() + &path;
-    let result = files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None)??;
+    let result = files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None)?;
 
     let mut src = result
         .body

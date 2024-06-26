@@ -155,7 +155,13 @@ impl log::Log for Output {
         .to_string();
         msg.push_str(": ");
         msg.push_str(&format!("{}", record.args()));
-        self.mp.println(&msg).unwrap();
+
+        let bars = self.bars.lock().unwrap();
+        if bars.is_empty() {
+            eprintln!("{}", msg);
+        } else {
+            self.mp.println(&msg).unwrap();
+        }
     }
 
     fn flush(&self) {}

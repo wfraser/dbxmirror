@@ -144,14 +144,12 @@ fn setup(args: SetupArgs, db_opts: &DatabaseOpts) -> anyhow::Result<()> {
     let mut auth = dropbox_sdk::oauth2::get_auth_from_env_or_prompt();
     auth.obtain_access_token(NoauthDefaultClient::default())?;
 
-    let client_id = auth.client_id.clone();
+    let client_id = auth.client_id().to_owned();
     let saved_auth = auth.save().unwrap();
 
     if args.remote_path != "/" {
         let client = UserAuthDefaultClient::new(auth);
         let meta = files::get_metadata(&client, &GetMetadataArg::new(args.remote_path.clone()))
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r.map_err(Into::into))
             .with_context(|| format!("Failed to look up remote path {:?}", args.remote_path))?;
         if matches!(meta, Metadata::File(_)) {
             bail!(
@@ -267,14 +265,16 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     }
 
     let mut page = if let Some(cursor) = cursor {
-        files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))??
+        files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))
+            .context("failed to list folder using cursor")?
     } else {
         files::list_folder(
             client.as_ref(),
             &ListFolderArg::new(remote_root.clone())
                 .with_recursive(true)
                 .with_include_deleted(true),
-        )??
+        )
+        .context("failed to list folder")?
     };
 
     loop {
@@ -411,10 +411,9 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             break;
         }
 
-        page = files::list_folder_continue(
-            client.as_ref(),
-            &ListFolderContinueArg::new(page.cursor),
-        )??;
+        page =
+            files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(page.cursor))
+                .context("failed to continue listing folder")?;
     }
 
     // Defuse error handler.
@@ -699,8 +698,10 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             if cwd.parent().is_none() {
-                return Err(anyhow!("Failed to find {DATABASE_FILENAME:?} in this or any parent directories."))
-                    .context("Please run \"dbxmirror setup\" before running other commands.");
+                return Err(anyhow!(
+                    "Failed to find {DATABASE_FILENAME:?} in this or any parent directories."
+                ))
+                .context("Please run \"dbxmirror setup\" before running other commands.");
             }
 
             cwd.pop();

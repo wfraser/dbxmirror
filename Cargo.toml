@@ -13,7 +13,7 @@ console = "0.15.8"
 crossbeam-channel = "0.5.13"
 dbxcase = { git = "https://github.com/wfraser/dbxcase.git" }
 dropbox-content-hasher = "0.3"
-dropbox-sdk = { version = "0.18.1", default-features = false, features = ["dbx_files", "default_client"] }
+dropbox-sdk = { version = "0.19.0-beta1", default-features = false, features = ["dbx_files", "default_client"] }
 hashbrown = "0.14.5"
 indicatif = { version = "0.17.8", features = ["in_memory"] }
 log = "0.4.21"
@@ -22,4 +22,4 @@ scopeguard = "1.2.0"
 time = { version = "0.3.36", features = ["parsing"] }
 
 [patch.crates-io]
-dropbox-sdk = { git = "https://github.com/wfraser/dropbox-sdk-rust.git" }
+dropbox-sdk = { git = "https://github.com/wfraser/dropbox-sdk-rust.git", branch = "async-mode-flaterror" }
