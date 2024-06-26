@@ -21,8 +21,7 @@ pub struct DatabaseOpts {
 
 impl Database {
     pub fn open(path: impl AsRef<Path>, opts: &DatabaseOpts) -> anyhow::Result<Self> {
-        let sql = Connection::open(path.as_ref())
-            .with_context(|| format!("failed to open {:?}", path.as_ref()))?;
+        let sql = Connection::open(path.as_ref())?;
 
         sql.execute(
             "CREATE TABLE IF NOT EXISTS meta (\

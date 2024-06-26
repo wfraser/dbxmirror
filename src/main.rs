@@ -16,24 +16,22 @@ use dbxcase::{dbx_eq_ignore_case, dbx_strip_prefix_ignore_case};
 use dropbox_content_hasher::DropboxContentHasher;
 use dropbox_sdk::common::PathRoot;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
-use dropbox_sdk::files;
 use dropbox_sdk::files::{
-    FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata,
+    self, FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata,
 };
 use dropbox_sdk::oauth2::Authorization;
 use scopeguard::{guard, ScopeGuard};
 use std::cell::OnceCell;
 use std::ffi::OsString;
-use std::fs::File;
-use std::io::Write;
+use std::fs::{self, File};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
-use std::{fs, io};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-const DATABASE_PATH: &str = "./.dbxmirror.db";
+const DATABASE_FILENAME: &str = ".dbxmirror.db";
 
 /// dbxmirror :: Dropbox Mirror
 ///
@@ -137,10 +135,10 @@ enum IgnoreArgs {
 }
 
 fn setup(args: SetupArgs, db_opts: &DatabaseOpts) -> anyhow::Result<()> {
-    let db = Database::open(DATABASE_PATH, db_opts)?;
+    let db = Database::open(DATABASE_FILENAME, db_opts)?;
 
     if db.config_opt("auth")?.is_some() {
-        bail!("this directory is already configured; remove {DATABASE_PATH} to setup again");
+        bail!("this directory is already configured; remove {DATABASE_FILENAME} to setup again");
     }
 
     let mut auth = dropbox_sdk::oauth2::get_auth_from_env_or_prompt();
@@ -686,7 +684,30 @@ fn main() -> anyhow::Result<()> {
     let db = if let Operation::Setup(setup_args) = args.op {
         return setup(setup_args, &args.db);
     } else {
-        Database::open(DATABASE_PATH, &args.db)?
+        let mut cwd = std::env::current_dir().context("failed to get working dir")?;
+        loop {
+            debug!("cwd is {cwd:?}");
+            match fs::metadata(DATABASE_FILENAME) {
+                Ok(_) => break,
+                Err(e) => {
+                    if e.kind() != io::ErrorKind::NotFound {
+                        return Err(e).context(format!(
+                            "failed to check for database file {:?}",
+                            cwd.join(DATABASE_FILENAME)
+                        ));
+                    }
+                }
+            }
+            if cwd.parent().is_none() {
+                return Err(anyhow!("Failed to find {DATABASE_FILENAME:?} in this or any parent directories."))
+                    .context("Please run \"dbxmirror setup\" before running other commands.");
+            }
+
+            cwd.pop();
+            std::env::set_current_dir(&cwd)
+                .context("failed to change working directory to {cwd:?}")?;
+        }
+        Database::open(cwd.join(DATABASE_FILENAME), &args.db)?
     };
 
     if db.config_opt("remote_path")?.is_none() {
