@@ -717,7 +717,13 @@ fn main() -> anyhow::Result<()> {
 
     match args.op {
         Operation::Setup(_) => unreachable!(),
-        Operation::Pull(pull_args) => pull(pull_args, args.common, &db)?,
+        Operation::Pull(pull_args) => pull(pull_args, args.common, &db).or_else(|e| {
+            if let Some(files::ListFolderContinueError::Reset) = e.root_cause().downcast_ref() {
+                error!("Dropbox requires a directory iterator cursor reset. Try again.");
+                db.unset_config("cursor")?;
+            }
+            Err(e)
+        })?,
         Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
         Operation::Check => check(&db)?,
     }

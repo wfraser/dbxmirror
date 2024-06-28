@@ -321,7 +321,7 @@ dependencies = [
 [[package]]
 name = "dropbox-sdk"
 version = "0.19.0-beta1"
-source = "git+https://github.com/wfraser/dropbox-sdk-rust.git?branch=async-mode-flaterror#876aa02eabfa154d6bc6a3dbd44397c905b4a149"
+source = "git+https://github.com/wfraser/dropbox-sdk-rust.git?branch=async-mode-flaterror#a253d0c8804b0134f84d3d1871dd571516b16f43"
 dependencies = [
  "async-lock",
  "atty",
