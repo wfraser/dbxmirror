@@ -385,7 +385,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                                     .map(|m| m.file_type().is_dir())
                                     .unwrap_or(false)
                                 {
-                                    fs::remove_dir(&actual_file_path).with_context(|| {
+                                    fs::remove_dir_all(&actual_file_path).with_context(|| {
                                         format!(
                                             "failed to remove local directory {actual_file_path:?}"
                                         )
