@@ -14,10 +14,10 @@ crossbeam-channel = "0.5.13"
 dbxcase = { git = "https://github.com/wfraser/dbxcase.git" }
 dropbox-content-hasher = "0.3"
 dropbox-sdk = { version = "0.19.0-beta1", default-features = false, features = ["dbx_files", "default_client"] }
-hashbrown = "0.14.5"
+hashbrown = "0.15.0"
 indicatif = { version = "0.17.8", features = ["in_memory"] }
 log = "0.4.21"
-rusqlite = { version = "0.31.0", features = ["bundled"] }
+rusqlite = { version = "0.32.0", features = ["bundled"] }
 scopeguard = "1.2.0"
 time = { version = "0.3.36", features = ["parsing"] }
 
