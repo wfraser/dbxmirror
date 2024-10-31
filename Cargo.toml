@@ -20,6 +20,3 @@ log = "0.4.21"
 rusqlite = { version = "0.32.0", features = ["bundled"] }
 scopeguard = "1.2.0"
 time = { version = "0.3.36", features = ["parsing"] }
-
-[patch.crates-io]
-dropbox-sdk = { git = "https://github.com/wfraser/dropbox-sdk-rust.git", branch = "async-mode-flaterror" }
