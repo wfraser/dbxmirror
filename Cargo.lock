@@ -270,8 +270,9 @@ checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 
 [[package]]
 name = "dbxcase"
-version = "0.1.0"
-source = "git+https://github.com/wfraser/dbxcase.git#febc5e5350738d812c57e777bbcea715adc91325"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf171f9e0ac7c43df6e4c4bdb5d46cf650dc903d89920ab5859dac66a82fed34"
 
 [[package]]
 name = "dbxmirror"
