@@ -125,6 +125,8 @@ impl Output {
         }
         self.mp.println(txt).unwrap();
 
+        // TODO/FIXME: figure out why the last message is always one less than the total
+
         let total = self.total_files.load(Relaxed);
         let finished = self.finished_files.fetch_add(1, Relaxed) + 1;
         self.overall
