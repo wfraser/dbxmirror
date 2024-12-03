@@ -2,8 +2,12 @@
 name = "dbxmirror"
 version = "0.2.4"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["Bill Fraser <bill@wfraser.dev>"]
+description = "Mirror a Dropbox directory tree efficiently"
+keywords = ["dropbox"]
+repository = "https://github.com/wfraser/dbxmirror"
+license = "MIT/Apache-2.0"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.81"
