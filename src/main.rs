@@ -316,6 +316,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             match entry {
                 Metadata::File(remote) => {
                     debug!("-> {path}");
+                    if !remote.is_downloadable {
+                        warn!("skipping non-downloadable file: {path}");
+                        continue;
+                    }
                     match open_file(&path) {
                         Ok(Some((mut local, _))) => {
                             debug!("checking pre-existing local file");
