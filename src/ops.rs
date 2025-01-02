@@ -5,7 +5,7 @@ use dropbox_sdk::files::{FileMetadata, Metadata};
 use std::collections::HashMap;
 
 pub enum Op {
-    AddedFile(String, FileMetadata),
+    AddedFile(String, Box<FileMetadata>),
     DeletedFile(String),
     MovedFile { old_path: String, new_path: String },
     CreateFolder(String),
@@ -101,7 +101,7 @@ pub fn list_folder_to_ops(
 
     for (_hash, files) in adds {
         for (path, meta) in files {
-            ops.push(Op::AddedFile(path, meta));
+            ops.push(Op::AddedFile(path, Box::new(meta)));
         }
     }
 
