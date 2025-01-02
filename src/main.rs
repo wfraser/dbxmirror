@@ -102,9 +102,9 @@ struct SetupArgs {
 #[clap_wrapper]
 #[derive(Debug, Clone, Parser)]
 struct PullArgs {
-    /// Don't download any files, but do check existing local files.
-    #[arg(long)]
-    no_download: bool,
+    /// Don't download any files or make other changes, but do check existing local files.
+    #[arg(long, alias = "no_download")]
+    dry_run: bool,
 
     /// Pull the entire list of files from scratch instead of resuming from the last successful
     /// pull.
@@ -322,7 +322,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
 
                     downloaded_files += 1;
                     downloaded_bytes += remote.size;
-                    if args.no_download {
+                    if args.dry_run {
                         would_download_files.push(path);
                     } else {
                         OUT.get().unwrap().inc_total(remote.size);
@@ -339,7 +339,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 }
                 Op::DeletedFile(path) => {
                     debug!("-> [delete] {path}");
-                    if args.no_download {
+                    if args.dry_run {
                         info!("skipping delete of {path}");
                         continue;
                     }
@@ -386,17 +386,29 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 }
                 Op::MovedFile { old_path, new_path } => {
                     debug!("-> move {old_path} -> {new_path}");
-                    fs::rename(&old_path, &new_path)
-                        .with_context(|| format!("failed to move {old_path:?} to {new_path:?}"))?;
-                    db.rename_file(&old_path, &new_path).with_context(|| {
-                        format!("failed to move {old_path:?} to {new_path:?} in the DB")
-                    })?;
-                    info!("moved {old_path:?} to {new_path:?}");
+                    if !args.dry_run {
+                        fs::rename(&old_path, &new_path).with_context(|| {
+                            format!("failed to move {old_path:?} to {new_path:?}")
+                        })?;
+                        db.rename_file(&old_path, &new_path).with_context(|| {
+                            format!("failed to move {old_path:?} to {new_path:?} in the DB")
+                        })?;
+                    }
+                    info!(
+                        "{} {old_path:?} to {new_path:?}",
+                        if args.dry_run {
+                            "Would have moved"
+                        } else {
+                            "Moved"
+                        }
+                    );
                 }
                 Op::CreateFolder(path) => {
                     // We don't store folders in the DB, but we can at least create them in the FS.
                     debug!("-> [folder] {path}");
-                    create_dir(&path)?;
+                    if !args.dry_run {
+                        create_dir(&path)?;
+                    }
                 }
             }
         }
@@ -419,15 +431,15 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
 
     info!(
         "{}downloaded {downloaded_bytes} bytes across {downloaded_files} files",
-        if args.no_download { "would have " } else { "" }
+        if args.dry_run { "would have " } else { "" }
     );
 
-    if args.no_download && downloaded_files > 0 {
+    if args.dry_run {
         info!("would have downloaded these files:");
         for file in would_download_files {
             info!("\t{file}");
         }
-        info!("not updating cursor because some needed files were not downloaded");
+        info!("not updating cursor because dry run is enabled");
     } else {
         db.set_config("cursor", &page.cursor)?;
     }
