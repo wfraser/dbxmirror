@@ -1,5 +1,6 @@
 mod db;
 mod downloader;
+mod ops;
 mod output;
 
 #[macro_use]
@@ -7,6 +8,7 @@ extern crate log;
 
 use crate::db::{Database, DatabaseOpts};
 use crate::downloader::{DownloadRequest, DownloadResult, Downloader};
+use crate::ops::Op;
 use crate::output::{Output, OUT};
 use anyhow::{anyhow, bail, Context};
 use clap::Parser;
@@ -278,43 +280,14 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     };
 
     loop {
-        'entries: for entry in page.entries {
+        let ops =
+            ops::list_folder_to_ops(page.entries, &(remote_root.clone() + "/"), &ignores, db)?;
+
+        for op in ops {
             complete_downloads(&dl_rx, db, false)?;
 
-            let path = match &entry {
-                Metadata::File(f) => f.path_display.as_ref(),
-                Metadata::Deleted(d) => d.path_display.as_ref(),
-                Metadata::Folder(f) => f.path_display.as_ref(),
-            };
-            if path
-                .map(|s| s.eq_ignore_case(&remote_root))
-                .unwrap_or(false)
-            {
-                // This is an entry for the root itself.
-                continue;
-            }
-            let path = path
-                .ok_or_else(|| anyhow!("missing path_display field from API"))?
-                .strip_prefix_ignore_case(&(remote_root.clone() + "/"))
-                .ok_or_else(|| {
-                    anyhow!(
-                        "remote path {:?} doesn't start with root path {:?}",
-                        path,
-                        remote_root
-                    )
-                })?
-                .to_owned();
-
-            for (test, regex) in &ignores {
-                if *regex {
-                    todo!("regex support");
-                } else if path.starts_with(test) {
-                    continue 'entries;
-                }
-            }
-
-            match entry {
-                Metadata::File(remote) => {
+            match op {
+                Op::AddedFile(path, remote) => {
                     debug!("-> {path}");
                     if !remote.is_downloadable {
                         warn!("skipping non-downloadable file: {path}");
@@ -364,12 +337,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             .unwrap();
                     }
                 }
-                Metadata::Folder(_) => {
-                    // We don't store folders in the DB, but we can at least create them in the FS.
-                    debug!("-> [folder] {path}");
-                    create_dir(&path)?;
-                }
-                Metadata::Deleted(_) => {
+                Op::DeletedFile(path) => {
                     debug!("-> [delete] {path}");
                     if args.no_download {
                         info!("skipping delete of {path}");
@@ -415,6 +383,20 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             });
                         }
                     }
+                }
+                Op::MovedFile { old_path, new_path } => {
+                    debug!("-> move {old_path} -> {new_path}");
+                    fs::rename(&old_path, &new_path)
+                        .with_context(|| format!("failed to move {old_path:?} to {new_path:?}"))?;
+                    db.rename_file(&old_path, &new_path).with_context(|| {
+                        format!("failed to move {old_path:?} to {new_path:?} in the DB")
+                    })?;
+                    info!("moved {old_path:?} to {new_path:?}");
+                }
+                Op::CreateFolder(path) => {
+                    // We don't store folders in the DB, but we can at least create them in the FS.
+                    debug!("-> [folder] {path}");
+                    create_dir(&path)?;
                 }
             }
         }

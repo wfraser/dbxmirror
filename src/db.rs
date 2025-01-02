@@ -149,6 +149,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn rename_file(&self, old_path: &str, new_path: &str) -> anyhow::Result<()> {
+        self.sql.execute(
+            "UPDATE files SET path = ?2 WHERE path = ?1",
+            [old_path, new_path],
+        )?;
+        Ok(())
+    }
+
     pub fn add_ignore(&self, path: &str, regex: bool) -> anyhow::Result<()> {
         self.sql.execute(
             "INSERT INTO ignores (path, regex) VALUES (?1, ?2)",
