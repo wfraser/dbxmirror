@@ -279,147 +279,141 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         .context("failed to list folder")?
     };
 
-    loop {
-        let ops =
-            ops::list_folder_to_ops(page.entries, &(remote_root.clone() + "/"), &ignores, db)?;
-
-        for op in ops {
-            complete_downloads(&dl_rx, db, false)?;
-
-            match op {
-                Op::AddedFile(path, remote) => {
-                    debug!("-> {path}");
-                    if !remote.is_downloadable {
-                        warn!("skipping non-downloadable file: {path}");
-                        continue;
-                    }
-                    match open_file(&path) {
-                        Ok(Some((mut local, _))) => {
-                            debug!("checking pre-existing local file");
-                            if check_local_file(&path, &mut local, Some(&remote), false, db)
-                                .with_context(|| format!("refusing to clobber local file {path}"))?
-                            {
-                                debug!("local file is already up-to-date");
-                                continue;
-                            }
-                        }
-                        Ok(None) => (),
-                        Err(e) => {
-                            return Err(e).with_context(|| {
-                                format!("error checking metadata of local file {path}")
-                            });
-                        }
-                    }
-
-                    let mtime = OffsetDateTime::parse(&remote.client_modified, &Rfc3339)
-                        .with_context(|| {
-                            format!("failed to parse timestamp {}", remote.client_modified)
-                        })?
-                        .unix_timestamp();
-                    let content_hash = remote
-                        .content_hash
-                        .ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
-
-                    downloaded_files += 1;
-                    downloaded_bytes += remote.size;
-                    if args.dry_run {
-                        would_download_files.push(path);
-                    } else {
-                        OUT.get().unwrap().inc_total(remote.size);
-                        dl_tx
-                            .send(DownloadRequest {
-                                path,
-                                rev: remote.rev,
-                                size: remote.size,
-                                mtime,
-                                content_hash,
-                            })
-                            .unwrap();
-                    }
-                }
-                Op::DeletedFile(path) => {
-                    debug!("-> [delete] {path}");
-                    if args.dry_run {
-                        info!("skipping delete of {path}");
-                        continue;
-                    }
-                    match open_file(&path) {
-                        Ok(Some((mut local, actual_file_path))) => {
-                            check_local_file(&path, &mut local, None, true, db)
-                                .with_context(|| format!("refusing to delete local file {path}"))?;
-
-                            // TODO: delete+add => move
-                            // Instead of immediately deleting, save the content hash in a map, and
-                            // see if some subsequent added file matches it, then do a move instead
-                            // of a delete and a download.
-
-                            info!("deleting {actual_file_path:?}");
-                            if let Err(e) = fs::remove_file(&actual_file_path).with_context(|| {
-                                format!("failed to remove local file {actual_file_path:?}")
-                            }) {
-                                // Is it a directory?
-                                if local
-                                    .metadata()
-                                    .map(|m| m.file_type().is_dir())
-                                    .unwrap_or(false)
-                                {
-                                    fs::remove_dir_all(&actual_file_path).with_context(|| {
-                                        format!(
-                                            "failed to remove local directory {actual_file_path:?}"
-                                        )
-                                    })?;
-                                } else {
-                                    return Err(e);
-                                }
-                            }
-                            db.remove_file(&path)?;
-                        }
-                        Ok(None) => {
-                            db.remove_file(&path)?;
-                        }
-                        Err(e) => {
-                            return Err(e).with_context(|| {
-                                format!("error checking metadata of local file {path}")
-                            });
-                        }
-                    }
-                }
-                Op::MovedFile { old_path, new_path } => {
-                    debug!("-> move {old_path} -> {new_path}");
-                    if !args.dry_run {
-                        fs::rename(&old_path, &new_path).with_context(|| {
-                            format!("failed to move {old_path:?} to {new_path:?}")
-                        })?;
-                        db.rename_file(&old_path, &new_path).with_context(|| {
-                            format!("failed to move {old_path:?} to {new_path:?} in the DB")
-                        })?;
-                    }
-                    info!(
-                        "{} {old_path:?} to {new_path:?}",
-                        if args.dry_run {
-                            "Would have moved"
-                        } else {
-                            "Moved"
-                        }
-                    );
-                }
-                Op::CreateFolder(path) => {
-                    // We don't store folders in the DB, but we can at least create them in the FS.
-                    debug!("-> [folder] {path}");
-                    if !args.dry_run {
-                        create_dir(&path)?;
-                    }
-                }
-            }
-        }
-
-        if !page.has_more {
-            break;
-        }
-
+    let mut all_entries = page.entries;
+    while page.has_more {
         page =
             files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(page.cursor))
                 .context("failed to continue listing folder")?;
+        all_entries.extend(page.entries);
+    }
+
+    let ops = ops::list_folder_to_ops(all_entries, &(remote_root.clone() + "/"), &ignores, db)?;
+
+    for op in ops {
+        complete_downloads(&dl_rx, db, false)?;
+
+        match op {
+            Op::AddedFile(path, remote) => {
+                debug!("-> {path}");
+                if !remote.is_downloadable {
+                    warn!("skipping non-downloadable file: {path}");
+                    continue;
+                }
+                match open_file(&path) {
+                    Ok(Some((mut local, _))) => {
+                        debug!("checking pre-existing local file");
+                        if check_local_file(&path, &mut local, Some(&remote), false, db)
+                            .with_context(|| format!("refusing to clobber local file {path}"))?
+                        {
+                            debug!("local file is already up-to-date");
+                            continue;
+                        }
+                    }
+                    Ok(None) => (),
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!("error checking metadata of local file {path}")
+                        });
+                    }
+                }
+
+                let mtime = OffsetDateTime::parse(&remote.client_modified, &Rfc3339)
+                    .with_context(|| {
+                        format!("failed to parse timestamp {}", remote.client_modified)
+                    })?
+                    .unix_timestamp();
+                let content_hash = remote
+                    .content_hash
+                    .ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
+
+                downloaded_files += 1;
+                downloaded_bytes += remote.size;
+                if args.dry_run {
+                    would_download_files.push(path);
+                } else {
+                    OUT.get().unwrap().inc_total(remote.size);
+                    dl_tx
+                        .send(DownloadRequest {
+                            path,
+                            rev: remote.rev,
+                            size: remote.size,
+                            mtime,
+                            content_hash,
+                        })
+                        .unwrap();
+                }
+            }
+            Op::DeletedFile(path) => {
+                debug!("-> [delete] {path}");
+                if args.dry_run {
+                    info!("skipping delete of {path}");
+                    continue;
+                }
+                match open_file(&path) {
+                    Ok(Some((mut local, actual_file_path))) => {
+                        check_local_file(&path, &mut local, None, true, db)
+                            .with_context(|| format!("refusing to delete local file {path}"))?;
+
+                        // TODO: delete+add => move
+                        // Instead of immediately deleting, save the content hash in a map, and
+                        // see if some subsequent added file matches it, then do a move instead
+                        // of a delete and a download.
+
+                        info!("deleting {actual_file_path:?}");
+                        if let Err(e) = fs::remove_file(&actual_file_path).with_context(|| {
+                            format!("failed to remove local file {actual_file_path:?}")
+                        }) {
+                            // Is it a directory?
+                            if local
+                                .metadata()
+                                .map(|m| m.file_type().is_dir())
+                                .unwrap_or(false)
+                            {
+                                fs::remove_dir_all(&actual_file_path).with_context(|| {
+                                    format!("failed to remove local directory {actual_file_path:?}")
+                                })?;
+                            } else {
+                                return Err(e);
+                            }
+                        }
+                        db.remove_file(&path)?;
+                    }
+                    Ok(None) => {
+                        db.remove_file(&path)?;
+                    }
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!("error checking metadata of local file {path}")
+                        });
+                    }
+                }
+            }
+            Op::MovedFile { old_path, new_path } => {
+                debug!("-> move {old_path} -> {new_path}");
+                if !args.dry_run {
+                    fs::rename(&old_path, &new_path)
+                        .with_context(|| format!("failed to move {old_path:?} to {new_path:?}"))?;
+                    db.rename_file(&old_path, &new_path).with_context(|| {
+                        format!("failed to move {old_path:?} to {new_path:?} in the DB")
+                    })?;
+                }
+                info!(
+                    "{} {old_path:?} to {new_path:?}",
+                    if args.dry_run {
+                        "Would have moved"
+                    } else {
+                        "Moved"
+                    }
+                );
+            }
+            Op::CreateFolder(path) => {
+                // We don't store folders in the DB, but we can at least create them in the FS.
+                debug!("-> [folder] {path}");
+                if !args.dry_run {
+                    create_dir(&path)?;
+                }
+            }
+        }
     }
 
     // Defuse error handler.
