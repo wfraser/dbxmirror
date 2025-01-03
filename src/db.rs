@@ -133,6 +133,17 @@ impl Database {
         }
     }
 
+    pub fn get_file_by_hash(&self, hash: &str) -> anyhow::Result<Option<String>> {
+        self.sql
+            .query_row(
+                "SELECT path FROM files WHERE content_hash = ?1",
+                [hash],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn for_files(&self, mut f: impl FnMut(&str) -> anyhow::Result<()>) -> anyhow::Result<()> {
         self.sql
             .prepare("SELECT path FROM files")?
