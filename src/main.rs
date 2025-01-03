@@ -373,11 +373,6 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                         check_local_file(&path, &mut local, None, true, db)
                             .with_context(|| format!("refusing to delete local file {path}"))?;
 
-                        // TODO: delete+add => move
-                        // Instead of immediately deleting, save the content hash in a map, and
-                        // see if some subsequent added file matches it, then do a move instead
-                        // of a delete and a download.
-
                         info!("deleting {actual_file_path:?}");
                         if let Err(e) = fs::remove_file(&actual_file_path).with_context(|| {
                             format!("failed to remove local file {actual_file_path:?}")
