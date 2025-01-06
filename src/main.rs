@@ -330,7 +330,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     Ok(true) => continue,
                     Ok(false) => (),
                     Err(e) => {
-                        warn!("Would have copied {path:?} from local file, but: {e}");
+                        warn!("Would have copied {path:?} from local file, but: {e:#}");
                     }
                 }
 
@@ -460,14 +460,14 @@ fn check(db: &Database) -> anyhow::Result<()> {
                     violations -= 1;
                 }
                 Err(e) => {
-                    eprintln!(": {e}");
+                    eprintln!(": {e:#}");
                 }
             },
             Ok(None) => {
                 eprintln!(": local file not found");
             }
             Err(e) => {
-                eprintln!(": failed to open local file: {e}");
+                eprintln!(": failed to open local file: {e:#}");
             }
         }
         Ok(())
