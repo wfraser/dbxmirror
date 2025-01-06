@@ -326,23 +326,12 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     .content_hash
                     .ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
 
-                // See if the file is a duplicate, and copy it instead of downloading.
-                if let Some(source_path) = db.get_file_by_hash(&content_hash)? {
-                    if args.dry_run {
-                        info!("Would copy {path:?} from pre-existing local file {source_path:?}");
-                        continue;
+                match try_copy_local_file(&path, &content_hash, mtime, db, args.dry_run) {
+                    Ok(true) => continue,
+                    Ok(false) => (),
+                    Err(e) => {
+                        warn!("Would have copied {path:?} from local file, but: {e}");
                     }
-                    debug!("Copying {path:?} from {source_path:?}");
-                    fs::copy(&source_path, &path)
-                        .with_context(|| format!("failed to copy {source_path:?} to {path:?}"))?;
-                    let Some((dest, _)) = open_file(&path).with_context(|| path.clone())? else {
-                        bail!("newly-created file {path:?} could not be opened");
-                    };
-                    dest.set_modified(SystemTime::UNIX_EPOCH + Duration::seconds(mtime))
-                        .context("failed to set mtime")?;
-                    db.set_file(&path, mtime, &content_hash)?;
-                    info!("Copied {path:?} from pre-existing local file");
-                    continue;
                 }
 
                 downloaded_files += 1;
@@ -487,6 +476,55 @@ fn check(db: &Database) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// See if the file is a duplicate of something we already have, and copy it instead of
+/// downloading.
+/// Returns true if this was done; false if no appropriate file was found, or an error if something
+/// unexpected happened.
+fn try_copy_local_file(
+    path: &str,
+    content_hash: &str,
+    mtime: i64,
+    db: &Database,
+    dry_run: bool,
+) -> anyhow::Result<bool> {
+    let Some(source_path) = db.get_file_by_hash(content_hash)? else {
+        // No matching file found to copy.
+        return Ok(false);
+    };
+
+    let Some((mut file, _)) = open_file(&source_path).with_context(|| source_path.clone())? else {
+        bail!("local file {source_path:?} is missing");
+    };
+
+    if !check_local_file(&source_path, &mut file, None, true, db)? {
+        bail!("{source_path:?} content is not what is expected");
+    }
+    drop(file);
+
+    if dry_run {
+        info!("Would copy {path:?} from pre-existing local file {source_path:?}");
+        // Pretend like we didn't find anything.
+        return Ok(false);
+    }
+
+    debug!("Copying {path:?} from {source_path:?}");
+    fs::copy(&source_path, path)
+        .with_context(|| format!("failed to copy {source_path:?} to {path:?}"))?;
+
+    let Some((dest, _)) = open_file(path).with_context(|| path.to_owned())? else {
+        bail!("newly-created file {path:?} could not be opened");
+    };
+
+    dest.set_modified(SystemTime::UNIX_EPOCH + Duration::seconds(mtime))
+        .context("failed to set mtime")?;
+    db.set_file(path, mtime, content_hash)?;
+    info!("Copied {path:?} from pre-existing local file");
+
+    Ok(true)
+}
+
+/// Check a local file against local database and optionally remote metadata.
+/// Returns true if the file matches.
 fn check_local_file(
     path: &str,
     local: &mut File,
