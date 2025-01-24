@@ -24,6 +24,7 @@ use dropbox_sdk::files::{
 use dropbox_sdk::oauth2::Authorization;
 use scopeguard::{guard, ScopeGuard};
 use std::cell::OnceCell;
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -287,9 +288,14 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         all_entries.extend(page.entries);
     }
 
-    let ops = ops::list_folder_to_ops(all_entries, &(remote_root.clone() + "/"), &ignores, db)?;
+    let mut ops = VecDeque::from(ops::list_folder_to_ops(
+        all_entries,
+        &(remote_root.clone() + "/"),
+        &ignores,
+        db,
+    )?);
 
-    for op in ops {
+    while let Some(op) = ops.pop_front() {
         complete_downloads(&dl_rx, db, false)?;
 
         match op {
@@ -391,11 +397,19 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     }
                 }
             }
-            Op::MovedFile { old_path, new_path } => {
+            Op::MovedFile {
+                old_path,
+                new_path,
+                remote,
+            } => {
                 debug!("-> move {old_path} -> {new_path}");
                 if !args.dry_run {
-                    fs::rename(&old_path, &new_path)
-                        .with_context(|| format!("failed to move {old_path:?} to {new_path:?}"))?;
+                    if let Err(e) = fs::rename(&old_path, &new_path) {
+                        warn!("failed to move {old_path:?} to {new_path:?}: {e}; downloading the file afresh instead");
+                        ops.push_front(Op::DeletedFile(old_path));
+                        ops.push_front(Op::AddedFile(new_path, remote));
+                        continue;
+                    }
                     db.rename_file(&old_path, &new_path).with_context(|| {
                         format!("failed to move {old_path:?} to {new_path:?} in the DB")
                     })?;

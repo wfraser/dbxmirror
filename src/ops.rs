@@ -7,7 +7,11 @@ use std::collections::HashMap;
 pub enum Op {
     AddedFile(String, Box<FileMetadata>),
     DeletedFile(String),
-    MovedFile { old_path: String, new_path: String },
+    MovedFile {
+        old_path: String,
+        new_path: String,
+        remote: Box<FileMetadata>,
+    },
     CreateFolder(String),
 }
 
@@ -86,10 +90,11 @@ pub fn list_folder_to_ops(
         };
 
         if let Some(files) = adds.get_mut(&hash) {
-            let (added_path, _meta) = files.pop().unwrap(); // not allowed to be empty
+            let (added_path, meta) = files.pop().unwrap(); // not allowed to be empty
             ops.push(Op::MovedFile {
                 old_path: deleted_path,
                 new_path: added_path,
+                remote: Box::new(meta),
             });
             if files.is_empty() {
                 adds.remove(&hash);
