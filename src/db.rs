@@ -133,11 +133,11 @@ impl Database {
         }
     }
 
-    pub fn get_file_by_hash(&self, hash: &str) -> anyhow::Result<Option<String>> {
+    pub fn get_file_by_hash(&self, hash: &str, neq_path: &str) -> anyhow::Result<Option<String>> {
         self.sql
             .query_row(
-                "SELECT path FROM files WHERE content_hash = ?1",
-                [hash],
+                "SELECT path FROM files WHERE content_hash = ?1 AND path != ?2",
+                [hash, neq_path],
                 |row| row.get(0),
             )
             .optional()

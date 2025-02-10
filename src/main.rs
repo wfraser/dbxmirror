@@ -526,7 +526,7 @@ fn try_copy_local_file(
     db: &Database,
     dry_run: bool,
 ) -> anyhow::Result<bool> {
-    let Some(source_path) = db.get_file_by_hash(content_hash)? else {
+    let Some(source_path) = db.get_file_by_hash(content_hash, path)? else {
         // No matching file found to copy.
         return Ok(false);
     };
