@@ -28,6 +28,11 @@ fn bar_style() -> ProgressStyle {
         .progress_chars("=> ")
 }
 
+fn paths_bar_style() -> ProgressStyle {
+    ProgressStyle::with_template("{msg} {pos} files")
+        .unwrap()
+}
+
 impl Output {
     pub fn init(opts: &CommonOptions) {
         let term = Term::stderr();
@@ -143,6 +148,15 @@ impl Output {
         if bars.is_empty() {
             self.mp.remove(&self.overall);
         }
+    }
+
+    pub fn paths_progress(&self) -> ProgressBar {
+        let bar = ProgressBar::no_length()
+            .with_style(paths_bar_style())
+            .with_message("Fetching file listing...")
+            .with_finish(ProgressFinish::AndClear);
+        self.mp.insert(0, bar.clone());
+        bar
     }
 }
 

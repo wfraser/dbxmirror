@@ -267,6 +267,8 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         remote_root = String::new();
     }
 
+    let paths = OUT.get().unwrap().paths_progress();
+
     let mut page = if let Some(cursor) = cursor {
         files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))
             .context("failed to list folder using cursor")?
@@ -279,14 +281,18 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         )
         .context("failed to list folder")?
     };
+    paths.inc(page.entries.len() as u64);
 
     let mut all_entries = page.entries;
     while page.has_more {
         page =
             files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(page.cursor))
                 .context("failed to continue listing folder")?;
+        paths.inc(page.entries.len() as u64);
         all_entries.extend(page.entries);
     }
+    paths.finish_and_clear();
+    info!("{} paths fetched", all_entries.len());
 
     let mut ops = VecDeque::from(ops::list_folder_to_ops(
         all_entries,
@@ -294,6 +300,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         &ignores,
         db,
     )?);
+    info!("{} operations to process", ops.len());
 
     let mut total_bytes = 0;
     let mut count_files = 0;
