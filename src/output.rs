@@ -55,13 +55,22 @@ impl Output {
         }
     }
 
-    /// Add to the total expected size of all downloads.
-    pub fn inc_total(&self, size: u64) {
-        let total = self.total_files.fetch_add(1, Relaxed) + 1;
+    /// Set the total expected size of all downloads.
+    pub fn set_total(&self, files: usize, size: u64) {
+        self.total_files.store(files, Relaxed);
+        let finished = self.finished_files.load(Relaxed);
+        self.overall
+            .set_message(format!("Total ({finished}/{files})"));
+        self.overall.set_length(size);
+    }
+
+    /// Remove one file (with given size) from the expected size of all downloads.
+    pub fn dec_total(&self, size: u64) {
+        let total = self.total_files.fetch_sub(1, Relaxed) + 1;
         let finished = self.finished_files.load(Relaxed);
         self.overall
             .set_message(format!("Total ({finished}/{total})"));
-        self.overall.inc_length(size);
+        self.overall.dec_length(size);
     }
 
     /// Update the progress bar for a path, and also the overall progress.

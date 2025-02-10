@@ -295,23 +295,34 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         db,
     )?);
 
+    let mut total_bytes = 0;
+    let mut count_files = 0;
+    for op in &ops {
+        if let Op::AddedFile(_path, remote) = op {
+            count_files += 1;
+            total_bytes += remote.size;
+        }
+    }
+    OUT.get().unwrap().set_total(count_files, total_bytes);
+
     while let Some(op) = ops.pop_front() {
         complete_downloads(&dl_rx, db, false)?;
 
         match op {
             Op::AddedFile(path, remote) => {
-                debug!("-> {path}");
                 if !remote.is_downloadable {
                     warn!("skipping non-downloadable file: {path}");
+                    OUT.get().unwrap().dec_total(remote.size);
                     continue;
                 }
                 match open_file(&path) {
                     Ok(Some((mut local, _))) => {
-                        debug!("checking pre-existing local file");
+                        debug!("{path}: checking pre-existing local file");
                         if check_local_file(&path, &mut local, Some(&remote), false, db)
                             .with_context(|| format!("refusing to clobber local file {path}"))?
                         {
-                            debug!("local file is already up-to-date");
+                            debug!("{path}: local file is already up-to-date");
+                            OUT.get().unwrap().dec_total(remote.size);
                             continue;
                         }
                     }
@@ -333,19 +344,22 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     .ok_or_else(|| anyhow!("missing content_hash in API metadata"))?;
 
                 match try_copy_local_file(&path, &content_hash, mtime, db, args.dry_run) {
-                    Ok(true) => continue,
+                    Ok(true) => {
+                        OUT.get().unwrap().dec_total(remote.size);
+                        continue;
+                    }
                     Ok(false) => (),
                     Err(e) => {
                         warn!("Would have copied {path:?} from local file, but: {e:#}");
                     }
                 }
 
+                debug!("-> {path}");
                 downloaded_files += 1;
                 downloaded_bytes += remote.size;
                 if args.dry_run {
                     would_download_files.push(path);
                 } else {
-                    OUT.get().unwrap().inc_total(remote.size);
                     dl_tx
                         .send(DownloadRequest {
                             path,
