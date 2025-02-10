@@ -29,8 +29,7 @@ fn bar_style() -> ProgressStyle {
 }
 
 fn paths_bar_style() -> ProgressStyle {
-    ProgressStyle::with_template("{msg} {pos} files")
-        .unwrap()
+    ProgressStyle::with_template("{msg} {pos} files").unwrap()
 }
 
 impl Output {
