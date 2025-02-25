@@ -138,10 +138,14 @@ impl Output {
         }
         self.mp.println(txt).unwrap();
 
-        // TODO/FIXME: figure out why the last message is always one less than the total
-
         let total = self.total_files.load(Relaxed);
         let finished = self.finished_files.fetch_add(1, Relaxed) + 1;
+        if total == finished {
+            // Force the overall bar to get redrawn when we change its message, regardless of timers
+            // and whatnot, since it's all going away very shortly and may not get this update drawn
+            // at all otherwise
+            self.overall.finish();
+        }
         self.overall
             .set_message(format!("Total ({finished}/{total})"));
         if bars.is_empty() {
