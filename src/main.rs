@@ -73,7 +73,7 @@ struct CommonOptions {
 #[derive(Debug, Clone, Parser)]
 enum Operation {
     /// Check the state of the local filesystem.
-    Check,
+    Check(CheckArgs),
 
     /// Pull updates from the server and update the local filesystem.
     Pull(PullArgs),
@@ -111,6 +111,21 @@ struct PullArgs {
     /// pull.
     #[arg(long)]
     full: bool,
+
+    /// Only pull changes under the specified path.
+    ///
+    /// When using this option, the stored cursor is not updated, so the next pull will also
+    /// process the same changes again.
+    #[arg()]
+    path: Option<String>,
+}
+
+#[clap_wrapper]
+#[derive(Debug, Clone, Parser)]
+struct CheckArgs {
+    /// Check only the specified path.
+    #[arg()]
+    path: Option<String>,
 }
 
 #[clap_wrapper]
@@ -294,6 +309,20 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     paths.finish_and_clear();
     info!("{} paths fetched", all_entries.len());
 
+    if let Some(prefix) = &args.path {
+        // TODO: interpret prefix relative to cwd
+        let prefix = remote_root.clone() + "/" + &dbxcase::dbx_str_lowercase(prefix);
+        all_entries.retain(|entry| {
+            let path = match entry {
+                Metadata::File(f) => &f.path_lower,
+                Metadata::Folder(f) => &f.path_lower,
+                Metadata::Deleted(d) => &d.path_lower,
+            }.as_ref().unwrap();
+            path.starts_with(&prefix)
+        });
+        info!("filtered to {} entries under subpath {prefix}", all_entries.len());
+    }
+
     let mut ops = VecDeque::from(ops::list_folder_to_ops(
         all_entries,
         &(remote_root.clone() + "/"),
@@ -472,6 +501,8 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             info!("\t{file}");
         }
         info!("not updating cursor because dry run is enabled");
+    } else if args.path.is_some() {
+        info!("not updating cursor because pull was limited to sub-path");
     } else {
         db.set_config("cursor", &page.cursor)?;
     }
@@ -479,11 +510,18 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     Ok(())
 }
 
-fn check(db: &Database) -> anyhow::Result<()> {
+fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
     eprintln!("Hashing files...");
     let mut checks = 0;
     let mut violations = vec![];
     db.for_files(|path| {
+        // TODO: interpret prefix relative to cwd
+        if let Some(prefix) = &args.path {
+            if !path.starts_with(prefix) {
+                return Ok(());
+            }
+        }
+
         checks += 1;
         eprint!("{path}");
         io::stderr().flush().unwrap();
@@ -816,7 +854,7 @@ fn main() -> anyhow::Result<()> {
             Err(e)
         })?,
         Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
-        Operation::Check => check(&db)?,
+        Operation::Check(check_args) => check(check_args, &db)?,
     }
 
     Ok(())
