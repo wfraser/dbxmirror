@@ -339,12 +339,15 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     }
 
     let mut all_entries = vec![];
-    let arg_paths = args.paths.iter()
+    let arg_paths = args
+        .paths
+        .iter()
         .map(|path| remote_root.clone() + "/" + &dbxcase::dbx_str_lowercase(path))
         .collect::<Vec<_>>();
 
     if let Some(starting_cursor) = cursor.clone() {
-        let (mut entries, ending_cursor) = list_entries(ListFrom::Cursor(starting_cursor), client.clone())?;
+        let (mut entries, ending_cursor) =
+            list_entries(ListFrom::Cursor(starting_cursor), client.clone())?;
         info!("{} paths fetched", entries.len());
 
         if !arg_paths.is_empty() {
@@ -353,13 +356,18 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     Metadata::File(f) => &f.path_lower,
                     Metadata::Folder(f) => &f.path_lower,
                     Metadata::Deleted(d) => &d.path_lower,
-                }.as_ref().unwrap();
+                }
+                .as_ref()
+                .unwrap();
                 arg_paths.iter().any(|prefix| {
                     // TODO: interpret paths relative to cwd
                     path.starts_with(prefix)
                 })
             });
-            info!("filtered to {} entries matching paths on the command-line", entries.len());
+            info!(
+                "filtered to {} entries matching paths on the command-line",
+                entries.len()
+            );
         }
 
         all_entries = entries;
@@ -374,7 +382,8 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         };
 
         for root in root_paths {
-            let (entries, ending_cursor) = list_entries(ListFrom::Path(root.clone()), client.clone())?;
+            let (entries, ending_cursor) =
+                list_entries(ListFrom::Path(root.clone()), client.clone())?;
             info!("{} paths fetched for {root}", entries.len());
             all_entries.extend(entries);
             if args.paths.is_empty() {
@@ -577,10 +586,12 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
     let mut checks = 0;
     let mut violations = vec![];
     db.for_files(|path| {
-        if !args.paths.is_empty() && args.paths.iter().all(|prefix| {
-            // TODO: interpret prefix relative to cwd
-            !path.starts_with(prefix)
-        }) {
+        if !args.paths.is_empty()
+            && args.paths.iter().all(|prefix| {
+                // TODO: interpret prefix relative to cwd
+                !path.starts_with(prefix)
+            })
+        {
             return Ok(());
         }
 
