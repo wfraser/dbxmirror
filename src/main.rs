@@ -112,20 +112,20 @@ struct PullArgs {
     #[arg(long)]
     full: bool,
 
-    /// Only pull changes under the specified path.
+    /// Only pull changes under the specified paths.
     ///
-    /// When using this option, the stored cursor is not updated, so the next pull will also
+    /// If paths are specified, the stored cursor is not updated, so the next pull will also
     /// process the same changes again.
-    #[arg()]
-    path: Option<String>,
+    #[arg(name = "PATH")]
+    paths: Vec<String>,
 }
 
 #[clap_wrapper]
 #[derive(Debug, Clone, Parser)]
 struct CheckArgs {
-    /// Check only the specified path.
-    #[arg()]
-    path: Option<String>,
+    /// Check only the specified paths.
+    #[arg(name = "PATH")]
+    paths: Vec<String>,
 }
 
 #[clap_wrapper]
@@ -249,6 +249,62 @@ fn complete_downloads(
     result
 }
 
+#[derive(Debug)]
+enum ListFrom {
+    Path(String),
+    Cursor(String),
+}
+
+/// List Dropbox filesystem entries.
+///
+/// Paths are lowercase, absolute Dropbox-root-relative paths.
+///
+/// Starting cursor, if set, will resume listing all entries using that cursor, and the results will
+/// be filtered according to the paths given. If unset, the given paths will be listed separately
+/// and their results joined together.
+///
+/// The result is a vec of filesystem entries, and a final cursor which can be saved to the DB.
+fn list_entries(
+    list_from: ListFrom,
+    client: Arc<UserAuthDefaultClient>,
+) -> anyhow::Result<(Vec<Metadata>, String)> {
+    debug!("Listing entries {list_from:?}");
+    let mut page = match list_from {
+        ListFrom::Cursor(cursor) => {
+            files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))
+                .context("failed to list folder using cursor")?
+        }
+        ListFrom::Path(path) => {
+            let entry = files::get_metadata(client.as_ref(), &GetMetadataArg::new(path.clone()))
+                .with_context(|| format!("failed to get metadata for {path:?}"))?;
+            if matches!(entry, Metadata::File(_)) {
+                return Ok((vec![entry], String::new()));
+            }
+            files::list_folder(
+                client.as_ref(),
+                &ListFolderArg::new(path.clone())
+                    .with_recursive(true)
+                    .with_include_deleted(true),
+            )
+            .with_context(|| format!("failed to list folder {path:?}"))?
+        }
+    };
+
+    let paths = OUT.get().unwrap().paths_progress();
+    paths.inc(page.entries.len() as u64);
+
+    let mut all_entries = page.entries;
+    while page.has_more {
+        page =
+            files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(page.cursor))
+                .context("failed to continue listing folder")?;
+        paths.inc(page.entries.len() as u64);
+        all_entries.extend(page.entries);
+    }
+
+    Ok((all_entries, page.cursor))
+}
+
 fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow::Result<()> {
     let mut remote_root = db.config("remote_path")?;
 
@@ -256,7 +312,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
 
     let client = client(db)?;
 
-    let cursor = if !args.full {
+    let mut cursor = if !args.full {
         db.config_opt("cursor")?
     } else {
         None
@@ -282,46 +338,52 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         remote_root = String::new();
     }
 
-    let paths = OUT.get().unwrap().paths_progress();
+    let mut all_entries = vec![];
+    let arg_paths = args.paths.iter()
+        .map(|path| remote_root.clone() + "/" + &dbxcase::dbx_str_lowercase(path))
+        .collect::<Vec<_>>();
 
-    let mut page = if let Some(cursor) = cursor {
-        files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))
-            .context("failed to list folder using cursor")?
+    if let Some(starting_cursor) = cursor.clone() {
+        let (mut entries, ending_cursor) = list_entries(ListFrom::Cursor(starting_cursor), client.clone())?;
+        info!("{} paths fetched", entries.len());
+
+        if !arg_paths.is_empty() {
+            entries.retain(|entry| {
+                let path = match entry {
+                    Metadata::File(f) => &f.path_lower,
+                    Metadata::Folder(f) => &f.path_lower,
+                    Metadata::Deleted(d) => &d.path_lower,
+                }.as_ref().unwrap();
+                arg_paths.iter().any(|prefix| {
+                    // TODO: interpret paths relative to cwd
+                    path.starts_with(prefix)
+                })
+            });
+            info!("filtered to {} entries matching paths on the command-line", entries.len());
+        }
+
+        all_entries = entries;
+        if args.paths.is_empty() {
+            cursor = Some(ending_cursor);
+        }
     } else {
-        files::list_folder(
-            client.as_ref(),
-            &ListFolderArg::new(remote_root.clone())
-                .with_recursive(true)
-                .with_include_deleted(true),
-        )
-        .context("failed to list folder")?
-    };
-    paths.inc(page.entries.len() as u64);
+        let root_paths = if args.paths.is_empty() {
+            vec![remote_root.clone()]
+        } else {
+            arg_paths
+        };
 
-    let mut all_entries = page.entries;
-    while page.has_more {
-        page =
-            files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(page.cursor))
-                .context("failed to continue listing folder")?;
-        paths.inc(page.entries.len() as u64);
-        all_entries.extend(page.entries);
+        for root in root_paths {
+            let (entries, ending_cursor) = list_entries(ListFrom::Path(root.clone()), client.clone())?;
+            info!("{} paths fetched for {root}", entries.len());
+            all_entries.extend(entries);
+            if args.paths.is_empty() {
+                cursor = Some(ending_cursor);
+            }
+        }
     }
-    paths.finish_and_clear();
-    info!("{} paths fetched", all_entries.len());
 
-    if let Some(prefix) = &args.path {
-        // TODO: interpret prefix relative to cwd
-        let prefix = remote_root.clone() + "/" + &dbxcase::dbx_str_lowercase(prefix);
-        all_entries.retain(|entry| {
-            let path = match entry {
-                Metadata::File(f) => &f.path_lower,
-                Metadata::Folder(f) => &f.path_lower,
-                Metadata::Deleted(d) => &d.path_lower,
-            }.as_ref().unwrap();
-            path.starts_with(&prefix)
-        });
-        info!("filtered to {} entries under subpath {prefix}", all_entries.len());
-    }
+    OUT.get().unwrap().paths_progress().finish_and_clear();
 
     let mut ops = VecDeque::from(ops::list_folder_to_ops(
         all_entries,
@@ -501,10 +563,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             info!("\t{file}");
         }
         info!("not updating cursor because dry run is enabled");
-    } else if args.path.is_some() {
-        info!("not updating cursor because pull was limited to sub-path");
+    } else if let Some(cursor) = cursor {
+        db.set_config("cursor", &cursor)?;
     } else {
-        db.set_config("cursor", &page.cursor)?;
+        info!("not updating cursor because pull was limited to sub-path");
     }
 
     Ok(())
@@ -515,11 +577,11 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
     let mut checks = 0;
     let mut violations = vec![];
     db.for_files(|path| {
-        // TODO: interpret prefix relative to cwd
-        if let Some(prefix) = &args.path {
-            if !path.starts_with(prefix) {
-                return Ok(());
-            }
+        if !args.paths.is_empty() && args.paths.iter().all(|prefix| {
+            // TODO: interpret prefix relative to cwd
+            !path.starts_with(prefix)
+        }) {
+            return Ok(());
         }
 
         checks += 1;
