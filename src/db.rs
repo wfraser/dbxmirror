@@ -3,10 +3,11 @@ use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use rusqlite::{params, Connection, DatabaseName, OptionalExtension};
 use std::convert::identity;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub struct Database {
     sql: Connection,
+    path: PathBuf,
 }
 
 /// Database options
@@ -20,8 +21,8 @@ pub struct DatabaseOpts {
 }
 
 impl Database {
-    pub fn open(path: impl AsRef<Path>, opts: &DatabaseOpts) -> anyhow::Result<Self> {
-        let sql = Connection::open(path.as_ref())?;
+    pub fn open(path: PathBuf, opts: &DatabaseOpts) -> anyhow::Result<Self> {
+        let sql = Connection::open(&path)?;
 
         sql.execute(
             "CREATE TABLE IF NOT EXISTS meta (\
@@ -72,7 +73,11 @@ impl Database {
             sql.pragma_update(Some(DatabaseName::Main), "synchronous", "OFF")?;
         }
 
-        Ok(Self { sql })
+        Ok(Self { sql, path })
+    }
+
+    pub fn local_root(&self) -> &'_ Path {
+        self.path.parent().unwrap()
     }
 
     pub fn config_opt(&self, name: &str) -> anyhow::Result<Option<String>> {

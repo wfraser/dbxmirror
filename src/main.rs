@@ -28,7 +28,7 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 use time::format_description::well_known::Rfc3339;
@@ -117,7 +117,7 @@ struct PullArgs {
     /// If paths are specified, the stored cursor is not updated, so the next pull will also
     /// process the same changes again.
     #[arg(name = "PATH")]
-    paths: Vec<String>,
+    paths: Vec<PathBuf>,
 }
 
 #[clap_wrapper]
@@ -125,7 +125,7 @@ struct PullArgs {
 struct CheckArgs {
     /// Check only the specified paths.
     #[arg(name = "PATH")]
-    paths: Vec<String>,
+    paths: Vec<PathBuf>,
 }
 
 #[clap_wrapper]
@@ -153,7 +153,7 @@ enum IgnoreArgs {
 }
 
 fn setup(args: SetupArgs, db_opts: &DatabaseOpts) -> anyhow::Result<()> {
-    let db = Database::open(DATABASE_FILENAME, db_opts)?;
+    let db = Database::open(PathBuf::from(DATABASE_FILENAME), db_opts)?;
 
     if db.config_opt("auth")?.is_some() {
         bail!("this directory is already configured; remove {DATABASE_FILENAME} to setup again");
@@ -307,6 +307,7 @@ fn list_entries(
 
 fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow::Result<()> {
     let mut remote_root = db.config("remote_path")?;
+    let local_root = db.local_root();
 
     let ignores = db.ignores()?;
 
@@ -342,8 +343,11 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     let arg_paths = args
         .paths
         .iter()
-        .map(|path| remote_root.clone() + "/" + &dbxcase::dbx_str_lowercase(path))
-        .collect::<Vec<_>>();
+        .map(|path| resolve_path(path, local_root, &remote_root))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    std::env::set_current_dir(local_root)
+        .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
 
     if let Some(starting_cursor) = cursor.clone() {
         let (mut entries, ending_cursor) =
@@ -359,10 +363,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 }
                 .as_ref()
                 .unwrap();
-                arg_paths.iter().any(|prefix| {
-                    // TODO: interpret paths relative to cwd
-                    path.starts_with(prefix)
-                })
+                arg_paths.iter().any(|prefix| path.starts_with(prefix))
             });
             info!(
                 "filtered to {} entries matching paths on the command-line",
@@ -585,12 +586,19 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
     eprintln!("Hashing files...");
     let mut checks = 0;
     let mut violations = vec![];
+
+    let local_root = db.local_root();
+    let paths = args.paths
+        .iter()
+        .map(|path| resolve_path(path, local_root, ""))
+        .collect::<anyhow::Result<Vec<String>>>()?;
+
+    std::env::set_current_dir(local_root)
+        .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
+
     db.for_files(|path| {
         if !args.paths.is_empty()
-            && args.paths.iter().all(|prefix| {
-                // TODO: interpret prefix relative to cwd
-                !path.starts_with(prefix)
-            })
+            && paths.iter().all(|prefix| !path.starts_with(&prefix[1..]))
         {
             return Ok(());
         }
@@ -849,6 +857,38 @@ fn create_dir(path: &str) -> anyhow::Result<()> {
     }
 }
 
+/// Take a local path, absolute or relative to CWD, and translate it to an absolute Dropbox path,
+/// using the configured local and remote roots.
+fn resolve_path(
+    path: &Path,
+    local_root: &Path,
+    remote_root: &str,
+) -> anyhow::Result<String> {
+    let mut absolute = std::env::current_dir().expect("unable to get current working dir");
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                absolute = PathBuf::from(component.as_os_str().to_owned());
+            }
+            Component::CurDir => (),
+            Component::ParentDir => {
+                absolute.pop();
+            }
+            Component::Normal(path) => {
+                absolute.push(path);
+            }
+        }
+    }
+
+    let relative = absolute.strip_prefix(local_root)
+        .map_err(|_| anyhow!("cannot operate on path outside the mirror root: {absolute:?}"))?;
+
+    let lower = dbxcase::dbx_str_lowercase(relative.to_str()
+        .with_context(|| format!("cannot operate on non-UTF8 path: {relative:?}"))?);
+
+    Ok(format!("{remote_root}/{lower}"))
+}
+
 trait StrExt {
     fn strip_prefix_ignore_case(&self, prefix: &str) -> Option<&'_ str>;
     fn eq_ignore_case(&self, other: &str) -> bool;
@@ -887,8 +927,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         let mut cwd = std::env::current_dir().context("failed to get working dir")?;
         loop {
-            debug!("cwd is {cwd:?}");
-            match fs::metadata(DATABASE_FILENAME) {
+            match fs::metadata(cwd.join(DATABASE_FILENAME)) {
                 Ok(_) => break,
                 Err(e) => {
                     if e.kind() != io::ErrorKind::NotFound {
@@ -907,9 +946,8 @@ fn main() -> anyhow::Result<()> {
             }
 
             cwd.pop();
-            std::env::set_current_dir(&cwd)
-                .context("failed to change working directory to {cwd:?}")?;
         }
+        debug!("local root is {cwd:?}");
         Database::open(cwd.join(DATABASE_FILENAME), &args.db)?
     };
 
