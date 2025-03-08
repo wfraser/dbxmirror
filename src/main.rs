@@ -588,7 +588,8 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
     let mut violations = vec![];
 
     let local_root = db.local_root();
-    let paths = args.paths
+    let paths = args
+        .paths
         .iter()
         .map(|path| resolve_path(path, local_root, ""))
         .collect::<anyhow::Result<Vec<String>>>()?;
@@ -597,9 +598,7 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
         .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
 
     db.for_files(|path| {
-        if !args.paths.is_empty()
-            && paths.iter().all(|prefix| !path.starts_with(&prefix[1..]))
-        {
+        if !args.paths.is_empty() && paths.iter().all(|prefix| !path.starts_with(&prefix[1..])) {
             return Ok(());
         }
 
@@ -859,11 +858,7 @@ fn create_dir(path: &str) -> anyhow::Result<()> {
 
 /// Take a local path, absolute or relative to CWD, and translate it to an absolute Dropbox path,
 /// using the configured local and remote roots.
-fn resolve_path(
-    path: &Path,
-    local_root: &Path,
-    remote_root: &str,
-) -> anyhow::Result<String> {
+fn resolve_path(path: &Path, local_root: &Path, remote_root: &str) -> anyhow::Result<String> {
     let mut absolute = std::env::current_dir().expect("unable to get current working dir");
     for component in path.components() {
         match component {
@@ -880,11 +875,15 @@ fn resolve_path(
         }
     }
 
-    let relative = absolute.strip_prefix(local_root)
+    let relative = absolute
+        .strip_prefix(local_root)
         .map_err(|_| anyhow!("cannot operate on path outside the mirror root: {absolute:?}"))?;
 
-    let lower = dbxcase::dbx_str_lowercase(relative.to_str()
-        .with_context(|| format!("cannot operate on non-UTF8 path: {relative:?}"))?);
+    let lower = dbxcase::dbx_str_lowercase(
+        relative
+            .to_str()
+            .with_context(|| format!("cannot operate on non-UTF8 path: {relative:?}"))?,
+    );
 
     Ok(format!("{remote_root}/{lower}"))
 }
