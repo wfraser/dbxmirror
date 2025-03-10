@@ -11,7 +11,7 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.81"
-clap = { version = "4.5.2", features = ["derive"] }
+clap = { version = "4.5.2", features = ["derive", "cargo", "string"] }
 clap-wrapper = { git = "https://github.com/wfraser/clap_wrapper.git" }
 console = "0.15.8"
 crossbeam-channel = "0.5.13"

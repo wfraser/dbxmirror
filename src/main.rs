@@ -41,7 +41,7 @@ const DATABASE_FILENAME: &str = ".dbxmirror.db";
 /// This program allows you to efficiently maintain a mirror of a Dropbox folder structure.
 #[clap_wrapper]
 #[derive(Debug, Parser)]
-#[command(version)]
+#[command(version = format!("{} by {}", clap::crate_version!(), clap::crate_authors!(", ")))]
 struct Args {
     #[command(subcommand)]
     op: Operation,
