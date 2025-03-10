@@ -352,7 +352,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     if let Some(starting_cursor) = cursor.clone() {
         let (mut entries, ending_cursor) =
             list_entries(ListFrom::Cursor(starting_cursor), client.clone())?;
-        info!("{} paths fetched", entries.len());
+        info!("{} changed paths", entries.len());
 
         if !arg_paths.is_empty() {
             entries.retain(|entry| {
@@ -401,7 +401,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         &ignores,
         db,
     )?);
-    info!("{} operations to process", ops.len());
+    info!("{} operations to perform", ops.len());
 
     let mut total_bytes = 0;
     let mut count_files = 0;
@@ -429,7 +429,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                         if check_local_file(&path, &mut local, Some(&remote), false, db)
                             .with_context(|| format!("refusing to clobber local file {path}"))?
                         {
-                            debug!("{path}: local file is already up-to-date");
+                            info!("{path}: up-to-date");
                             OUT.get().unwrap().dec_total(remote.size);
                             continue;
                         }
