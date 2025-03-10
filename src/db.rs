@@ -13,15 +13,10 @@ pub struct Database {
 /// Database options
 #[clap_wrapper(prefix = "db")]
 #[derive(Clone, Debug, Parser)]
-pub struct DatabaseOpts {
-    /// Don't sync the database with the filesystem on each commit. Dangerous, but much faster if
-    /// you have a lot of changes.
-    #[arg(long)]
-    turbo: bool,
-}
+pub struct DatabaseOpts {}
 
 impl Database {
-    pub fn open(path: PathBuf, opts: &DatabaseOpts) -> anyhow::Result<Self> {
+    pub fn open(path: PathBuf, _opts: &DatabaseOpts) -> anyhow::Result<Self> {
         let sql = Connection::open(&path)?;
 
         sql.execute(
@@ -69,9 +64,11 @@ impl Database {
             [],
         )?;
 
-        if opts.turbo {
-            sql.pragma_update(Some(DatabaseName::Main), "synchronous", "OFF")?;
-        }
+        // Don't do a filesystem sync on every commit.
+        // Theoretically, if the system loses power in the middle of an operation, the DB could
+        // lose data. Given that this is just file metadata, and makes it an order of magnitude
+        // faster, this is worth it.
+        sql.pragma_update(Some(DatabaseName::Main), "synchronous", "OFF")?;
 
         Ok(Self { sql, path })
     }
