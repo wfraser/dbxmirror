@@ -15,7 +15,7 @@ use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use crossbeam_channel::Receiver;
 use dbxcase::{dbx_eq_ignore_case, dbx_strip_prefix_ignore_case};
-use dropbox_content_hasher::DropboxContentHasher;
+use dropbox_content_hash::ContentHasher;
 use dropbox_sdk::common::PathRoot;
 use dropbox_sdk::default_client::{NoauthDefaultClient, UserAuthDefaultClient};
 use dropbox_sdk::files::{
@@ -697,8 +697,10 @@ fn check_local_file(
         if let Some(hash) = cached_hash.get().as_ref() {
             return Ok(hash);
         }
-        let h = DropboxContentHasher::hash_reader(local).context("failed to hash local file")?;
-        cached_hash.set(format!("{:x}", h)).unwrap();
+        let h = ContentHasher::from_stream(local)
+            .context("failed to hash local file")?
+            .finish_str();
+        cached_hash.set(h).unwrap();
         Ok(cached_hash.get().unwrap().as_str())
     };
 
