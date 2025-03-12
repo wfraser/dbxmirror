@@ -363,7 +363,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 }
                 .as_ref()
                 .unwrap();
-                arg_paths.iter().any(|prefix| path.starts_with(prefix))
+
+                arg_paths
+                    .iter()
+                    .any(|prefix| path.starts_with_ignore_case(prefix))
             });
             info!(
                 "filtered to {} entries matching paths on the command-line",
@@ -860,9 +863,9 @@ fn create_dir(path: &str) -> anyhow::Result<()> {
 
 /// Take a local path, absolute or relative to CWD, and translate it to an absolute Dropbox path,
 /// using the configured local and remote roots.
-fn resolve_path(path: &Path, local_root: &Path, remote_root: &str) -> anyhow::Result<String> {
+fn resolve_path(local_path: &Path, local_root: &Path, remote_root: &str) -> anyhow::Result<String> {
     let mut absolute = std::env::current_dir().expect("unable to get current working dir");
-    for component in path.components() {
+    for component in local_path.components() {
         match component {
             Component::Prefix(_) | Component::RootDir => {
                 absolute = PathBuf::from(component.as_os_str().to_owned());
@@ -881,18 +884,20 @@ fn resolve_path(path: &Path, local_root: &Path, remote_root: &str) -> anyhow::Re
         .strip_prefix(local_root)
         .map_err(|_| anyhow!("cannot operate on path outside the mirror root: {absolute:?}"))?;
 
-    let lower = dbxcase::dbx_str_lowercase(
-        relative
-            .to_str()
-            .with_context(|| format!("cannot operate on non-UTF8 path: {relative:?}"))?,
-    );
+    let path = relative
+        .to_str()
+        .with_context(|| format!("cannot operate on non-UTF8 path: {relative:?}"))?;
 
-    Ok(format!("{remote_root}/{lower}"))
+    Ok(format!("{remote_root}/{path}"))
 }
 
 trait StrExt {
     fn strip_prefix_ignore_case(&self, prefix: &str) -> Option<&'_ str>;
     fn eq_ignore_case(&self, other: &str) -> bool;
+
+    fn starts_with_ignore_case(&self, prefix: &str) -> bool {
+        self.strip_prefix_ignore_case(prefix).is_some()
+    }
 }
 
 impl StrExt for str {
