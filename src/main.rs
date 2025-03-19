@@ -6,7 +6,7 @@ mod output;
 #[macro_use]
 extern crate log;
 
-use crate::db::{Database, DatabaseOpts};
+use crate::db::Database;
 use crate::downloader::{DownloadRequest, DownloadResult, Downloader};
 use crate::ops::Op;
 use crate::output::{Output, OUT};
@@ -48,9 +48,6 @@ struct Args {
 
     #[command(flatten)]
     common: CommonOptions,
-
-    #[command(flatten)]
-    db: DatabaseOpts,
 }
 
 /// Common options
@@ -152,8 +149,8 @@ enum IgnoreArgs {
     },
 }
 
-fn setup(args: SetupArgs, db_opts: &DatabaseOpts) -> anyhow::Result<()> {
-    let db = Database::open(PathBuf::from(DATABASE_FILENAME), db_opts)?;
+fn setup(args: SetupArgs) -> anyhow::Result<()> {
+    let db = Database::open(PathBuf::from(DATABASE_FILENAME))?;
 
     if db.config_opt("auth")?.is_some() {
         bail!("this directory is already configured; remove {DATABASE_FILENAME} to setup again");
@@ -929,7 +926,7 @@ fn main() -> anyhow::Result<()> {
     Output::init(&args.common);
 
     let db = if let Operation::Setup(setup_args) = args.op {
-        return setup(setup_args, &args.db);
+        return setup(setup_args);
     } else {
         let mut cwd = std::env::current_dir().context("failed to get working dir")?;
         loop {
@@ -954,7 +951,7 @@ fn main() -> anyhow::Result<()> {
             cwd.pop();
         }
         debug!("local root is {cwd:?}");
-        Database::open(cwd.join(DATABASE_FILENAME), &args.db)?
+        Database::open(cwd.join(DATABASE_FILENAME))?
     };
 
     if db.config_opt("remote_path")?.is_none() {

@@ -1,6 +1,4 @@
 use anyhow::{anyhow, bail, Context};
-use clap::Parser;
-use clap_wrapper::clap_wrapper;
 use rusqlite::{params, Connection, DatabaseName, OptionalExtension};
 use std::convert::identity;
 use std::path::{Path, PathBuf};
@@ -10,13 +8,8 @@ pub struct Database {
     path: PathBuf,
 }
 
-/// Database options
-#[clap_wrapper(prefix = "db")]
-#[derive(Clone, Debug, Parser)]
-pub struct DatabaseOpts {}
-
 impl Database {
-    pub fn open(path: PathBuf, _opts: &DatabaseOpts) -> anyhow::Result<Self> {
+    pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let sql = Connection::open(&path)?;
 
         sql.execute(
