@@ -1,6 +1,6 @@
 [package]
 name = "dbxmirror"
-version = "0.2.15"
+version = "0.2.16"
 edition = "2021"
 authors = ["Bill Fraser <bill@wfraser.dev>"]
 description = "Mirror a Dropbox directory tree efficiently"
@@ -24,3 +24,4 @@ log = "0.4.21"
 rusqlite = { version = "0.34.0", features = ["bundled"] }
 scopeguard = "1.2.0"
 time = { version = "0.3.36", features = ["parsing"] }
+walkdir = "2.5.0"

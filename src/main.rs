@@ -23,6 +23,7 @@ use dropbox_sdk::files::{
 };
 use dropbox_sdk::oauth2::Authorization;
 use scopeguard::{guard, ScopeGuard};
+use std::borrow::Borrow;
 use std::cell::OnceCell;
 use std::collections::VecDeque;
 use std::ffi::OsString;
@@ -33,6 +34,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
+use walkdir::WalkDir;
 
 const DATABASE_FILENAME: &str = ".dbxmirror.db";
 
@@ -487,26 +489,65 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 }
                 match open_file(&path) {
                     Ok(Some((mut local, actual_file_path))) => {
-                        check_local_file(&path, &mut local, None, true, db)
-                            .with_context(|| format!("refusing to delete local file {path}"))?;
-
-                        info!("deleting {actual_file_path:?}");
-                        if let Err(e) = fs::remove_file(&actual_file_path).with_context(|| {
-                            format!("failed to remove local file {actual_file_path:?}")
-                        }) {
-                            // Is it a directory?
-                            if local
-                                .metadata()
-                                .map(|m| m.file_type().is_dir())
-                                .unwrap_or(false)
-                            {
-                                fs::remove_dir_all(&actual_file_path).with_context(|| {
-                                    format!("failed to remove local directory {actual_file_path:?}")
+                        let is_dir = local
+                            .metadata()
+                            .map(|m| m.file_type().is_dir())
+                            .unwrap_or(false);
+                        if is_dir {
+                            for entry in WalkDir::new(&actual_file_path) {
+                                let entry = entry?;
+                                if entry.file_type().is_dir() {
+                                    continue;
+                                }
+                                debug!("checking {:?}", entry.path());
+                                let mut f = File::open(entry.path())
+                                    .with_context(|| entry.path().display().to_string())
+                                    .with_context(|| {
+                                        format!("failed to open {:?}", entry.path())
+                                    })?;
+                                check_local_file(
+                                    entry.path().to_string_lossy().borrow(),
+                                    &mut f,
+                                    None,
+                                    true,
+                                    db,
+                                )
+                                .with_context(|| {
+                                    format!(
+                                        "refusing to delete unknown local file {:?}",
+                                        entry.path()
+                                    )
                                 })?;
-                            } else {
-                                return Err(e);
                             }
+                            // All files in the dir checked ok; delete it.
+                            // There's a toctou issue here, but without holding all the checked
+                            // files open the whole time, we can't really fix it. Just don't modify
+                            // the dir during this check, okay? :P
+                            info!("deleting dir {actual_file_path:?}");
+                            fs::remove_dir_all(&actual_file_path).with_context(|| {
+                                format!("failed to remove local directory {actual_file_path:?}")
+                            })?;
+
+                            let mut files = vec![];
+                            let check = path.to_owned() + "/";
+                            db.for_files(|subpath| {
+                                if subpath.starts_with(&check) {
+                                    files.push(subpath.to_owned());
+                                }
+                                Ok(())
+                            })?;
+                            for subfile in files {
+                                db.remove_file(&subfile)?;
+                            }
+                        } else {
+                            check_local_file(&path, &mut local, None, true, db)
+                                .with_context(|| format!("refusing to delete local file {path}"))?;
+                            info!("deleting {actual_file_path:?}");
+                            fs::remove_file(&actual_file_path).with_context(|| {
+                                format!("failed to remove local file {actual_file_path:?}")
+                            })?;
                         }
+
                         db.remove_file(&path)?;
                     }
                     Ok(None) => {
@@ -763,15 +804,10 @@ fn check_local_file(
             Ok(true)
         } else {
             // No local DB entry
-            if local
-                .metadata()
-                .map(|m| m.file_type().is_dir())
-                .unwrap_or(false)
-            {
-                Ok(false)
-            } else {
-                Err(anyhow!("unknown local file, no remote metadata"))
+            if local.metadata()?.file_type().is_dir() {
+                return Err(anyhow!("not deleting local dir without checking it first"));
             }
+            Err(anyhow!("unknown local file, no remote metadata"))
         }
     }
 }
