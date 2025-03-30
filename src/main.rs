@@ -426,7 +426,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     continue;
                 }
                 match open_file(&path) {
-                    Ok(Some((mut local, _))) => {
+                    Ok(Some((Some(mut local), _))) => {
                         debug!("{path}: checking pre-existing local file");
                         if check_local_file(&path, &mut local, Some(&remote), false, db)
                             .with_context(|| format!("refusing to clobber local file {path}"))?
@@ -435,6 +435,9 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             OUT.get().unwrap().dec_total(remote.size);
                             continue;
                         }
+                    }
+                    Ok(Some((None, _))) => {
+                        bail!("{path} exists and is a directory; cannot download file");
                     }
                     Ok(None) => (),
                     Err(e) => {
@@ -488,66 +491,61 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     continue;
                 }
                 match open_file(&path) {
-                    Ok(Some((mut local, actual_file_path))) => {
-                        let is_dir = local
-                            .metadata()
-                            .map(|m| m.file_type().is_dir())
-                            .unwrap_or(false);
-                        if is_dir {
-                            for entry in WalkDir::new(&actual_file_path) {
-                                let entry = entry?;
-                                if entry.file_type().is_dir() {
-                                    continue;
-                                }
-                                debug!("checking {:?}", entry.path());
-                                let mut f = File::open(entry.path())
-                                    .with_context(|| entry.path().display().to_string())
-                                    .with_context(|| {
-                                        format!("failed to open {:?}", entry.path())
-                                    })?;
-                                check_local_file(
-                                    entry.path().to_string_lossy().borrow(),
-                                    &mut f,
-                                    None,
-                                    true,
-                                    db,
-                                )
+                    Ok(Some((Some(mut local), actual_file_path))) => {
+                        check_local_file(&path, &mut local, None, true, db)
+                            .with_context(|| format!("refusing to delete local file {path}"))?;
+                        info!("deleting {actual_file_path:?}");
+                        fs::remove_file(&actual_file_path).with_context(|| {
+                            format!("failed to remove local file {actual_file_path:?}")
+                        })?;
+                        db.remove_file(&path)?;
+                    }
+                    Ok(Some((None, actual_file_path))) => {
+                        for entry in WalkDir::new(&actual_file_path) {
+                            let entry = entry?;
+                            if entry.file_type().is_dir() {
+                                continue;
+                            }
+                            debug!("checking {:?}", entry.path());
+                            let mut f = File::open(entry.path())
+                                .with_context(|| entry.path().display().to_string())
                                 .with_context(|| {
-                                    format!(
-                                        "refusing to delete unknown local file {:?}",
-                                        entry.path()
-                                    )
+                                    format!("failed to open {:?}", entry.path())
                                 })?;
-                            }
-                            // All files in the dir checked ok; delete it.
-                            // There's a toctou issue here, but without holding all the checked
-                            // files open the whole time, we can't really fix it. Just don't modify
-                            // the dir during this check, okay? :P
-                            info!("deleting dir {actual_file_path:?}");
-                            fs::remove_dir_all(&actual_file_path).with_context(|| {
-                                format!("failed to remove local directory {actual_file_path:?}")
-                            })?;
-
-                            let mut files = vec![];
-                            let check = path.to_owned() + "/";
-                            db.for_files(|subpath| {
-                                if subpath.starts_with(&check) {
-                                    files.push(subpath.to_owned());
-                                }
-                                Ok(())
-                            })?;
-                            for subfile in files {
-                                db.remove_file(&subfile)?;
-                            }
-                        } else {
-                            check_local_file(&path, &mut local, None, true, db)
-                                .with_context(|| format!("refusing to delete local file {path}"))?;
-                            info!("deleting {actual_file_path:?}");
-                            fs::remove_file(&actual_file_path).with_context(|| {
-                                format!("failed to remove local file {actual_file_path:?}")
+                            check_local_file(
+                                entry.path().to_string_lossy().borrow(),
+                                &mut f,
+                                None,
+                                true,
+                                db,
+                            )
+                            .with_context(|| {
+                                format!(
+                                    "refusing to delete unknown local file {:?}",
+                                    entry.path()
+                                )
                             })?;
                         }
+                        // All files in the dir checked ok; delete it.
+                        // There's a toctou issue here, but without holding all the checked
+                        // files open the whole time, we can't really fix it. Just don't modify
+                        // the dir during this check, okay? :P
+                        info!("deleting dir {actual_file_path:?}");
+                        fs::remove_dir_all(&actual_file_path).with_context(|| {
+                            format!("failed to remove local directory {actual_file_path:?}")
+                        })?;
 
+                        let mut files = vec![];
+                        let check = path.to_owned() + "/";
+                        db.for_files(|subpath| {
+                            if subpath.starts_with(&check) {
+                                files.push(subpath.to_owned());
+                            }
+                            Ok(())
+                        })?;
+                        for subfile in files {
+                            db.remove_file(&subfile)?;
+                        }
                         db.remove_file(&path)?;
                     }
                     Ok(None) => {
@@ -647,7 +645,7 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
         eprint!("{path}");
         io::stderr().flush().unwrap();
         match open_file(path) {
-            Ok(Some((mut local, _))) => match check_local_file(path, &mut local, None, true, db) {
+            Ok(Some((Some(mut local), _))) => match check_local_file(path, &mut local, None, true, db) {
                 Ok(_) => {
                     eprint!("\r{:width$}\r", "", width = path.len());
                 }
@@ -656,6 +654,10 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
                     violations.push(format!("{path}: {e:#}"));
                 }
             },
+            Ok(Some((None, _))) => {
+                eprintln!(": expected file; found dir");
+                violations.push(format!("{path}: expected file; found dir"));
+            }
             Ok(None) => {
                 eprintln!(": local file not found");
                 violations.push(format!("{path}: local file not found"));
@@ -690,7 +692,7 @@ fn try_copy_local_file(
         return Ok(false);
     };
 
-    let Some((mut file, _)) = open_file(&source_path).with_context(|| source_path.clone())? else {
+    let Some((Some(mut file), _)) = open_file(&source_path).with_context(|| source_path.clone())? else {
         bail!("local file {source_path:?} is missing");
     };
 
@@ -709,7 +711,7 @@ fn try_copy_local_file(
     fs::copy(&source_path, path)
         .with_context(|| format!("failed to copy {source_path:?} to {path:?}"))?;
 
-    let Some((dest, _)) = open_file(path).with_context(|| path.to_owned())? else {
+    let Some((Some(dest), _)) = open_file(path).with_context(|| path.to_owned())? else {
         bail!("newly-created file {path:?} could not be opened");
     };
 
@@ -825,12 +827,31 @@ fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
     Ok(Arc::new(client))
 }
 
-fn open_file(path: &str) -> anyhow::Result<Option<(File, PathBuf)>> {
-    match File::open(path) {
-        Ok(f) => return Ok(Some((f, path.into()))),
-        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
-        _ => (), // continue to case-insentive lookup
+fn open_file(path: &str) -> anyhow::Result<Option<(Option<File>, PathBuf)>> {
+    macro_rules! try_open {
+        ($path:expr) => {
+            let path = Path::new($path);
+            match File::open(path) {
+                Ok(f) => {
+                    if f.metadata().map(|m| m.file_type().is_dir()).unwrap_or(false) {
+                        return Ok(Some((None, path.into())));
+                    }
+                    return Ok(Some((Some(f), path.into())));
+                }
+
+                #[cfg(windows)]
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied
+                    && fs::metadata(path).map(|m| m.file_type().is_dir()).unwrap_or(false) => {
+                    return Ok(Some((None, path.into())));
+                }
+
+                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
+                _ => (), // continue to case-insentive lookup
+            }
+        }
     }
+
+    try_open!(path);
 
     let mut cur = PathBuf::from(".");
 
@@ -845,10 +866,8 @@ fn open_file(path: &str) -> anyhow::Result<Option<(File, PathBuf)>> {
         return Ok(None);
     }
 
-    Ok(Some((
-        File::open(&cur).with_context(|| format!("failed to open file {cur:?}"))?,
-        cur,
-    )))
+    try_open!(&cur);
+    Err(anyhow!("failed to open file {cur:?}"))
 }
 
 fn create_dirs_case_insentive(path: &str) -> anyhow::Result<PathBuf> {
