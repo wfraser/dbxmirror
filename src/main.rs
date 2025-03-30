@@ -425,8 +425,8 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     OUT.get().unwrap().dec_total(remote.size);
                     continue;
                 }
-                match open_file(&path) {
-                    Ok(Some((Some(mut local), _))) => {
+                match open_file(&path).with_context(|| format!("checking local file {path}"))? {
+                    OpenResult::File(mut local, _) => {
                         debug!("{path}: checking pre-existing local file");
                         if check_local_file(&path, &mut local, Some(&remote), false, db)
                             .with_context(|| format!("refusing to clobber local file {path}"))?
@@ -436,15 +436,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             continue;
                         }
                     }
-                    Ok(Some((None, _))) => {
+                    OpenResult::Dir(_) => {
                         bail!("{path} exists and is a directory; cannot download file");
                     }
-                    Ok(None) => (),
-                    Err(e) => {
-                        return Err(e).with_context(|| {
-                            format!("error checking metadata of local file {path}")
-                        });
-                    }
+                    OpenResult::NotFound => (),
                 }
 
                 let mtime = OffsetDateTime::parse(&remote.client_modified, &Rfc3339)
@@ -490,8 +485,8 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     info!("skipping delete of {path}");
                     continue;
                 }
-                match open_file(&path) {
-                    Ok(Some((Some(mut local), actual_file_path))) => {
+                match open_file(&path).with_context(|| format!("checking local file {path}"))? {
+                    OpenResult::File(mut local, actual_file_path) => {
                         check_local_file(&path, &mut local, None, true, db)
                             .with_context(|| format!("refusing to delete local file {path}"))?;
                         info!("deleting {actual_file_path:?}");
@@ -500,7 +495,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                         })?;
                         db.remove_file(&path)?;
                     }
-                    Ok(Some((None, actual_file_path))) => {
+                    OpenResult::Dir(actual_file_path) => {
                         for entry in WalkDir::new(&actual_file_path) {
                             let entry = entry?;
                             if entry.file_type().is_dir() {
@@ -509,9 +504,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             debug!("checking {:?}", entry.path());
                             let mut f = File::open(entry.path())
                                 .with_context(|| entry.path().display().to_string())
-                                .with_context(|| {
-                                    format!("failed to open {:?}", entry.path())
-                                })?;
+                                .with_context(|| format!("failed to open {:?}", entry.path()))?;
                             check_local_file(
                                 entry.path().to_string_lossy().borrow(),
                                 &mut f,
@@ -520,10 +513,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                                 db,
                             )
                             .with_context(|| {
-                                format!(
-                                    "refusing to delete unknown local file {:?}",
-                                    entry.path()
-                                )
+                                format!("refusing to delete unknown local file {:?}", entry.path())
                             })?;
                         }
                         // All files in the dir checked ok; delete it.
@@ -548,13 +538,8 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                         }
                         db.remove_file(&path)?;
                     }
-                    Ok(None) => {
+                    OpenResult::NotFound => {
                         db.remove_file(&path)?;
-                    }
-                    Err(e) => {
-                        return Err(e).with_context(|| {
-                            format!("error checking metadata of local file {path}")
-                        });
                     }
                 }
             }
@@ -645,20 +630,22 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
         eprint!("{path}");
         io::stderr().flush().unwrap();
         match open_file(path) {
-            Ok(Some((Some(mut local), _))) => match check_local_file(path, &mut local, None, true, db) {
-                Ok(_) => {
-                    eprint!("\r{:width$}\r", "", width = path.len());
+            Ok(OpenResult::File(mut local, _)) => {
+                match check_local_file(path, &mut local, None, true, db) {
+                    Ok(_) => {
+                        eprint!("\r{:width$}\r", "", width = path.len());
+                    }
+                    Err(e) => {
+                        eprintln!(": {e:#}");
+                        violations.push(format!("{path}: {e:#}"));
+                    }
                 }
-                Err(e) => {
-                    eprintln!(": {e:#}");
-                    violations.push(format!("{path}: {e:#}"));
-                }
-            },
-            Ok(Some((None, _))) => {
+            }
+            Ok(OpenResult::Dir(_)) => {
                 eprintln!(": expected file; found dir");
                 violations.push(format!("{path}: expected file; found dir"));
             }
-            Ok(None) => {
+            Ok(OpenResult::NotFound) => {
                 eprintln!(": local file not found");
                 violations.push(format!("{path}: local file not found"));
             }
@@ -692,7 +679,9 @@ fn try_copy_local_file(
         return Ok(false);
     };
 
-    let Some((Some(mut file), _)) = open_file(&source_path).with_context(|| source_path.clone())? else {
+    let OpenResult::File(mut file, _) =
+        open_file(&source_path).with_context(|| source_path.clone())?
+    else {
         bail!("local file {source_path:?} is missing");
     };
 
@@ -711,7 +700,7 @@ fn try_copy_local_file(
     fs::copy(&source_path, path)
         .with_context(|| format!("failed to copy {source_path:?} to {path:?}"))?;
 
-    let Some((Some(dest), _)) = open_file(path).with_context(|| path.to_owned())? else {
+    let OpenResult::File(dest, _) = open_file(path).with_context(|| path.to_owned())? else {
         bail!("newly-created file {path:?} could not be opened");
     };
 
@@ -827,28 +816,41 @@ fn client(db: &Database) -> anyhow::Result<Arc<UserAuthDefaultClient>> {
     Ok(Arc::new(client))
 }
 
-fn open_file(path: &str) -> anyhow::Result<Option<(Option<File>, PathBuf)>> {
+enum OpenResult {
+    File(File, PathBuf),
+    Dir(PathBuf),
+    NotFound,
+}
+
+fn open_file(path: &str) -> anyhow::Result<OpenResult> {
     macro_rules! try_open {
         ($path:expr) => {
             let path = Path::new($path);
             match File::open(path) {
                 Ok(f) => {
-                    if f.metadata().map(|m| m.file_type().is_dir()).unwrap_or(false) {
-                        return Ok(Some((None, path.into())));
+                    if f.metadata()
+                        .map(|m| m.file_type().is_dir())
+                        .unwrap_or(false)
+                    {
+                        return Ok(OpenResult::Dir(path.into()));
                     }
-                    return Ok(Some((Some(f), path.into())));
+                    return Ok(OpenResult::File(f, path.into()));
                 }
 
                 #[cfg(windows)]
-                Err(e) if e.kind() == io::ErrorKind::PermissionDenied
-                    && fs::metadata(path).map(|m| m.file_type().is_dir()).unwrap_or(false) => {
-                    return Ok(Some((None, path.into())));
+                Err(e)
+                    if e.kind() == io::ErrorKind::PermissionDenied
+                        && fs::metadata(path)
+                            .map(|m| m.file_type().is_dir())
+                            .unwrap_or(false) =>
+                {
+                    return Ok(OpenResult::Dir(path.into()));
                 }
 
                 Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
                 _ => (), // continue to case-insentive lookup
             }
-        }
+        };
     }
 
     try_open!(path);
@@ -863,7 +865,7 @@ fn open_file(path: &str) -> anyhow::Result<Option<(Option<File>, PathBuf)>> {
                 continue 'component;
             }
         }
-        return Ok(None);
+        return Ok(OpenResult::NotFound);
     }
 
     try_open!(&cur);
