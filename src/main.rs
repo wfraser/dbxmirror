@@ -436,8 +436,11 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             continue;
                         }
                     }
-                    OpenResult::Dir(_) => {
-                        bail!("{path} exists and is a directory; cannot download file");
+                    OpenResult::Dir(dirpath) => {
+                        // As an edge case, an existing empty directory can be replaced by a file.
+                        if let Err(e) = fs::remove_dir(dirpath) {
+                            bail!("{path} exists and is a directory (and could not be removed: {e}); cannot download file");
+                        }
                     }
                     OpenResult::NotFound => (),
                 }
