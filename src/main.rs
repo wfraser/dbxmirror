@@ -682,7 +682,8 @@ fn try_copy_local_file(
         return Ok(false);
     };
 
-    let OpenResult::File(mut file, _) =
+    // Open the file and get its actual casing on the local filesystem.
+    let OpenResult::File(mut file, actual_path) =
         open_file(&source_path).with_context(|| source_path.clone())?
     else {
         bail!("local file {source_path:?} is missing");
@@ -694,14 +695,14 @@ fn try_copy_local_file(
     drop(file);
 
     if dry_run {
-        info!("Would copy {path:?} from pre-existing local file {source_path:?}");
+        info!("Would copy {path:?} from pre-existing local file {actual_path:?}");
         // Pretend like we didn't find anything.
         return Ok(false);
     }
 
-    debug!("Copying {path:?} from {source_path:?}");
-    fs::copy(&source_path, path)
-        .with_context(|| format!("failed to copy {source_path:?} to {path:?}"))?;
+    debug!("Copying {path:?} from {actual_path:?}");
+    fs::copy(&actual_path, path)
+        .with_context(|| format!("failed to copy {actual_path:?} to {path:?}"))?;
 
     let OpenResult::File(dest, _) = open_file(path).with_context(|| path.to_owned())? else {
         bail!("newly-created file {path:?} could not be opened");
