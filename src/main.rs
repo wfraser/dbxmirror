@@ -786,7 +786,7 @@ fn check_local_file(
             debug!("remote mtime: {remote_mtime}");
             if hash_files {
                 debug!(" local hash: {:?}", local_content_hash(local));
-                debug!("remote hash: {}", remote_content_hash);
+                debug!("remote hash: {remote_content_hash}");
             } else {
                 debug!("hashing disabled");
             }

@@ -186,7 +186,7 @@ impl log::Log for Output {
 
         let bars = self.bars.lock().unwrap();
         if bars.is_empty() {
-            eprintln!("{}", msg);
+            eprintln!("{msg}");
         } else {
             self.mp.println(&msg).unwrap();
         }
