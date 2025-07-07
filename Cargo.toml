@@ -13,13 +13,13 @@ readme = "README.md"
 anyhow = "1.0.81"
 clap = { version = "4.5.2", features = ["derive", "cargo", "string"] }
 clap-wrapper = { git = "https://github.com/wfraser/clap_wrapper.git" }
-console = "0.15.8"
+console = "0.16.0"
 crossbeam-channel = "0.5.13"
 dbxcase = "1.0.0"
 dropbox-content-hash = { git = "https://github.com/wfraser/dropbox-content-hash.git" }
 dropbox-sdk = { version = "0.19.0", default-features = false, features = ["dbx_files", "default_client"] }
 hashbrown = "0.15.0"
-indicatif = { version = "0.17.8", features = ["in_memory"] }
+indicatif = { version = "0.18.0", features = ["in_memory"] }
 log = "0.4.21"
 rusqlite = { version = "0.34.0", features = ["bundled"] }
 scopeguard = "1.2.0"
