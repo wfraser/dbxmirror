@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context};
-use rusqlite::{params, Connection, DatabaseName, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::convert::identity;
 use std::path::{Path, PathBuf};
 
@@ -61,7 +61,7 @@ impl Database {
         // Theoretically, if the system loses power in the middle of an operation, the DB could
         // lose data. Given that this is just file metadata, and makes it an order of magnitude
         // faster, this is worth it.
-        sql.pragma_update(Some(DatabaseName::Main), "synchronous", "OFF")?;
+        sql.pragma_update(None, "synchronous", "OFF")?;
 
         Ok(Self { sql, path })
     }
