@@ -700,18 +700,25 @@ fn try_copy_local_file(
         return Ok(false);
     }
 
-    debug!("Copying {path:?} from {actual_path:?}");
-    fs::copy(&actual_path, path)
-        .with_context(|| format!("failed to copy {actual_path:?} to {path:?}"))?;
-
-    let OpenResult::File(dest, _) = open_file(path).with_context(|| path.to_owned())? else {
-        bail!("newly-created file {path:?} could not be opened");
+    // destination path may have case-incorrect parent dir(s); figure out what the
+    // filesystem-correct path is.
+    let dest_path = {
+        let (parent, filename) = path.rsplit_once('/')
+            .unwrap_or((".", path));
+        let actual_parent = create_dirs_case_insentive(parent)?;
+        actual_parent.join(filename)
     };
+
+    debug!("Copying {dest_path:?} from {actual_path:?}");
+    fs::copy(&actual_path, &dest_path)
+        .with_context(|| format!("failed to copy {actual_path:?} to {dest_path:?}"))?;
+
+    let dest = File::open(&dest_path).with_context(|| format!("{dest_path:?}"))?;
 
     dest.set_modified(SystemTime::UNIX_EPOCH + Duration::seconds(mtime))
         .context("failed to set mtime")?;
     db.set_file(path, mtime, content_hash)?;
-    info!("Copied {path:?} from pre-existing local file");
+    info!("Copied {dest_path:?} from pre-existing local file {actual_path:?}");
 
     Ok(true)
 }
