@@ -275,8 +275,9 @@ fn list_entries(
         }
         ListFrom::Path(path) => {
             if !path.is_empty() {
-                let entry = files::get_metadata(client.as_ref(), &GetMetadataArg::new(path.clone()))
-                    .with_context(|| format!("failed to get metadata for {path:?}"))?;
+                let entry =
+                    files::get_metadata(client.as_ref(), &GetMetadataArg::new(path.clone()))
+                        .with_context(|| format!("failed to get metadata for {path:?}"))?;
                 if matches!(entry, Metadata::File(_)) {
                     return Ok((vec![entry], String::new()));
                 }
@@ -705,8 +706,7 @@ fn try_copy_local_file(
     // destination path may have case-incorrect parent dir(s); figure out what the
     // filesystem-correct path is.
     let dest_path = {
-        let (parent, filename) = path.rsplit_once('/')
-            .unwrap_or((".", path));
+        let (parent, filename) = path.rsplit_once('/').unwrap_or((".", path));
         let actual_parent = create_dirs_case_insentive(parent)?;
         actual_parent.join(filename)
     };
@@ -860,11 +860,11 @@ fn open_file(path: &str) -> anyhow::Result<OpenResult> {
                     return Ok(OpenResult::Dir(path.into()));
                 }
 
-                Err(e)
-                    if e.kind() == io::ErrorKind::NotADirectory =>
-                {
+                Err(e) if e.kind() == io::ErrorKind::NotADirectory => {
                     // some component of the path is a file instead of a directory
-                    debug!("some parent of {path:?} is a file, not a directory; treating as not found");
+                    debug!(
+                        "some parent of {path:?} is a file, not a directory; treating as not found"
+                    );
                     return Ok(OpenResult::NotFound);
                 }
 
