@@ -274,10 +274,12 @@ fn list_entries(
                 .context("failed to list folder using cursor")?
         }
         ListFrom::Path(path) => {
-            let entry = files::get_metadata(client.as_ref(), &GetMetadataArg::new(path.clone()))
-                .with_context(|| format!("failed to get metadata for {path:?}"))?;
-            if matches!(entry, Metadata::File(_)) {
-                return Ok((vec![entry], String::new()));
+            if !path.is_empty() {
+                let entry = files::get_metadata(client.as_ref(), &GetMetadataArg::new(path.clone()))
+                    .with_context(|| format!("failed to get metadata for {path:?}"))?;
+                if matches!(entry, Metadata::File(_)) {
+                    return Ok((vec![entry], String::new()));
+                }
             }
             files::list_folder(
                 client.as_ref(),
