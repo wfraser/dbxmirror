@@ -860,6 +860,14 @@ fn open_file(path: &str) -> anyhow::Result<OpenResult> {
                     return Ok(OpenResult::Dir(path.into()));
                 }
 
+                Err(e)
+                    if e.kind() == io::ErrorKind::NotADirectory =>
+                {
+                    // some component of the path is a file instead of a directory
+                    debug!("some parent of {path:?} is a file, not a directory; treating as not found");
+                    return Ok(OpenResult::NotFound);
+                }
+
                 Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e.into()),
                 _ => (), // continue to case-insentive lookup
             }
@@ -871,7 +879,17 @@ fn open_file(path: &str) -> anyhow::Result<OpenResult> {
     let mut cur = PathBuf::from(".");
 
     'component: for component in path.split('/') {
-        for entry in fs::read_dir(&cur).with_context(|| format!("unable to open dir {cur:?}"))? {
+        let readdir = match fs::read_dir(&cur) {
+            Ok(it) => it,
+            Err(e) if e.kind() == io::ErrorKind::NotADirectory => {
+                debug!("{cur:?} is a file, not a directory; treating as not found");
+                return Ok(OpenResult::NotFound);
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("unable to open dir {cur:?}"));
+            }
+        };
+        for entry in readdir {
             let entry = entry?;
             if entry.file_name().eq_ignore_case(component) {
                 cur = entry.path();
