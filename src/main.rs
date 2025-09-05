@@ -555,25 +555,17 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 remote,
             } => {
                 debug!("-> move {old_path} -> {new_path}");
+                if let Err(e) = move_local_file(&old_path, &new_path, args.dry_run) {
+                    warn!("failed to move {old_path:?} to {new_path:?}: {e}; downloading the file afresh instead");
+                    ops.push_front(Op::DeletedFile(old_path));
+                    ops.push_front(Op::AddedFile(new_path, remote));
+                    continue;
+                }
                 if !args.dry_run {
-                    if let Err(e) = fs::rename(&old_path, &new_path) {
-                        warn!("failed to move {old_path:?} to {new_path:?}: {e}; downloading the file afresh instead");
-                        ops.push_front(Op::DeletedFile(old_path));
-                        ops.push_front(Op::AddedFile(new_path, remote));
-                        continue;
-                    }
                     db.rename_file(&old_path, &new_path).with_context(|| {
                         format!("failed to move {old_path:?} to {new_path:?} in the DB")
                     })?;
                 }
-                info!(
-                    "{} {old_path:?} to {new_path:?}",
-                    if args.dry_run {
-                        "Would have moved"
-                    } else {
-                        "Moved"
-                    }
-                );
             }
             Op::CreateFolder(path) => {
                 // We don't store folders in the DB, but we can at least create them in the FS.
@@ -685,13 +677,7 @@ fn try_copy_local_file(
         return Ok(false);
     };
 
-    // Open the file and get its actual casing on the local filesystem.
-    let OpenResult::File(mut file, actual_path) =
-        open_file(&source_path).with_context(|| source_path.clone())?
-    else {
-        bail!("local file {source_path:?} is missing");
-    };
-
+    let (mut file, actual_path) = existing_local_file(&source_path)?;
     if !check_local_file(&source_path, &mut file, None, true, db)? {
         bail!("{source_path:?} content is not what is expected");
     }
@@ -703,13 +689,7 @@ fn try_copy_local_file(
         return Ok(false);
     }
 
-    // destination path may have case-incorrect parent dir(s); figure out what the
-    // filesystem-correct path is.
-    let dest_path = {
-        let (parent, filename) = path.rsplit_once('/').unwrap_or((".", path));
-        let actual_parent = create_dirs_case_insentive(parent)?;
-        actual_parent.join(filename)
-    };
+    let dest_path = new_local_file_path(path)?;
 
     debug!("Copying {dest_path:?} from {actual_path:?}");
     fs::copy(&actual_path, &dest_path)
@@ -723,6 +703,34 @@ fn try_copy_local_file(
     info!("Copied {dest_path:?} from pre-existing local file {actual_path:?}");
 
     Ok(true)
+}
+
+/// Open a file and get its actual casing on the local filesystem.
+fn existing_local_file(dropbox_path: &str) -> anyhow::Result<(File, PathBuf)> {
+    match open_file(dropbox_path) {
+        Ok(OpenResult::File(file, actual_path)) => Ok((file, actual_path)),
+        Ok(OpenResult::Dir(path)) => bail!("found a dir; expected a file: {path:?}"),
+        Ok(OpenResult::NotFound) => bail!("local file not found: {dropbox_path}"),
+        Err(e) => bail!("failed to open file {dropbox_path}: {e}"),
+    }
+}
+
+/// Given a path with maybe case-incorrect parent components, get the correct path for the local filesystem.
+fn new_local_file_path(dropbox_path: &str) -> anyhow::Result<PathBuf> {
+    let (parent, filename) = dropbox_path.rsplit_once('/').unwrap_or((".", dropbox_path));
+    let actual_parent = create_dirs_case_insentive(parent)?;
+    Ok(actual_parent.join(filename))
+}
+
+fn move_local_file(src: &str, dst: &str, dry_run: bool) -> anyhow::Result<()> {
+    let (_, source_path) = existing_local_file(src)?;
+    let dest_path = new_local_file_path(dst)?;
+    if dry_run {
+        info!("would rename {source_path:?} to {dest_path:?}");
+        return Ok(());
+    }
+    fs::rename(source_path, dest_path)?;
+    Ok(())
 }
 
 /// Check a local file against local database and optionally remote metadata.
