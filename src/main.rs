@@ -267,13 +267,15 @@ fn list_entries(
     list_from: ListFrom,
     client: Arc<UserAuthDefaultClient>,
 ) -> anyhow::Result<(Vec<Metadata>, String)> {
-    debug!("Listing entries {list_from:?}");
+
     let mut page = match list_from {
         ListFrom::Cursor(cursor) => {
+            debug!("Listing entries from cursor");
             files::list_folder_continue(client.as_ref(), &ListFolderContinueArg::new(cursor))
                 .context("failed to list folder using cursor")?
         }
         ListFrom::Path(path) => {
+            debug!("Listing entries from {path}");
             if !path.is_empty() {
                 let entry =
                     files::get_metadata(client.as_ref(), &GetMetadataArg::new(path.clone()))
