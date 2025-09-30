@@ -780,13 +780,16 @@ fn check_local_file(
     // Check local file against existing database entry.
     let db_match = if let Some((db_mtime, db_content_hash)) = db.get_file(path)? {
         if local_mtime != db_mtime {
-            bail!("local file modification time mismatch with DB");
+            warn!("local file modification time mismatch with DB: {path}");
+            false
+        } else if hash_files && local_content_hash(local)? != db_content_hash {
+            warn!("local file hash mismatch with DB: {path}");
+            false
+        } else {
+            true
         }
-        if hash_files && local_content_hash(local)? != db_content_hash {
-            bail!("local file hash mismatch with DB");
-        }
-        true
     } else {
+        warn!("unknown local file: {path}");
         false
     };
 
