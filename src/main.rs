@@ -431,8 +431,15 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 match open_file(&path).with_context(|| format!("checking local file {path}"))? {
                     OpenResult::File(mut local, _) => {
                         debug!("{path}: checking pre-existing local file");
-                        if check_local_file(&path, &mut local, Some(&remote), false, db)
-                            .with_context(|| format!("refusing to clobber local file {path}"))?
+                        if check_local_file(
+                            &path,
+                            &mut local,
+                            Some(&remote),
+                            false,
+                            args.dry_run,
+                            db,
+                        )
+                        .with_context(|| format!("refusing to clobber local file {path}"))?
                         {
                             info!("{path}: up-to-date");
                             OUT.get().unwrap().dec_total(remote.size);
@@ -493,7 +500,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 }
                 match open_file(&path).with_context(|| format!("checking local file {path}"))? {
                     OpenResult::File(mut local, actual_file_path) => {
-                        check_local_file(&path, &mut local, None, true, db)
+                        check_local_file(&path, &mut local, None, true, args.dry_run, db)
                             .with_context(|| format!("refusing to delete local file {path}"))?;
                         info!("deleting {actual_file_path:?}");
                         fs::remove_file(&actual_file_path).with_context(|| {
@@ -516,6 +523,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                                 &mut f,
                                 None,
                                 true,
+                                args.dry_run,
                                 db,
                             )
                             .with_context(|| {
@@ -629,7 +637,7 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
         io::stderr().flush().unwrap();
         match open_file(path) {
             Ok(OpenResult::File(mut local, _)) => {
-                match check_local_file(path, &mut local, None, true, db) {
+                match check_local_file(path, &mut local, None, true, true, db) {
                     Ok(_) => {
                         eprint!("\r{:width$}\r", "", width = path.len());
                     }
@@ -678,7 +686,7 @@ fn try_copy_local_file(
     };
 
     let (mut file, actual_path) = existing_local_file(&source_path)?;
-    if !check_local_file(&source_path, &mut file, None, true, db)? {
+    if !check_local_file(&source_path, &mut file, None, true, dry_run, db)? {
         bail!("{source_path:?} content is not what is expected");
     }
     drop(file);
@@ -740,6 +748,7 @@ fn check_local_file(
     local: &mut File,
     remote: Option<&FileMetadata>,
     hash_files: bool,
+    dry_run: bool,
     db: &Database,
 ) -> anyhow::Result<bool> {
     let cached_hash = OnceCell::<String>::new();
@@ -792,7 +801,12 @@ fn check_local_file(
             && (!hash_files || local_content_hash(local)? == remote_content_hash)
         {
             // Local file matches remote already; mark it in DB directly.
-            db.set_file(path, remote_mtime, remote_content_hash)?;
+            if !dry_run {
+                debug!("marking DB up to date: {path}");
+                db.set_file(path, remote_mtime, remote_content_hash)?;
+            } else {
+                info!("would mark DB up to date: {path}");
+            }
             Ok(true)
         } else if db_match {
             // File matches DB, but not remote. Ok to overwrite.
