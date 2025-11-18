@@ -496,14 +496,14 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             }
             Op::DeletedFile(path) => {
                 debug!("-> [delete] {path}");
-                if args.dry_run {
-                    info!("skipping delete of {path}");
-                    continue;
-                }
                 match open_file(&path).with_context(|| format!("checking local file {path}"))? {
                     OpenResult::File(mut local, actual_file_path) => {
                         check_local_file(&path, &mut local, None, true, args.dry_run, db)
                             .with_context(|| format!("refusing to delete local file {path}"))?;
+                        if args.dry_run {
+                            info!("skipping delete of {path}");
+                            continue;
+                        }
                         info!("deleting {actual_file_path:?}");
                         fs::remove_file(&actual_file_path).with_context(|| {
                             format!("failed to remove local file {actual_file_path:?}")
@@ -532,6 +532,11 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                                 format!("refusing to delete unknown local file {:?}", entry.path())
                             })?;
                         }
+                        if args.dry_run {
+                            info!("skipping recursive delete of {path}");
+                            continue;
+                        }
+
                         // All files in the dir checked ok; delete it.
                         // There's a toctou issue here, but without holding all the checked
                         // files open the whole time, we can't really fix it. Just don't modify
@@ -555,6 +560,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                         db.remove_file(&path)?;
                     }
                     OpenResult::NotFound => {
+                        if args.dry_run {
+                            info!("skipping delete of {path}");
+                            continue;
+                        }
                         db.remove_file(&path)?;
                     }
                 }
@@ -868,6 +877,7 @@ fn open_file(path: &str) -> anyhow::Result<OpenResult> {
             let path = Path::new($path);
             match File::open(path) {
                 Ok(f) => {
+                    let path = path.strip_prefix("./").unwrap_or(path);
                     if f.metadata()
                         .map(|m| m.file_type().is_dir())
                         .unwrap_or(false)
