@@ -267,7 +267,6 @@ fn list_entries(
     list_from: ListFrom,
     client: Arc<UserAuthDefaultClient>,
 ) -> anyhow::Result<(Vec<Metadata>, String)> {
-
     let mut page = match list_from {
         ListFrom::Cursor(cursor) => {
             debug!("Listing entries from cursor");
@@ -639,7 +638,11 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
         .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
 
     db.for_files(|path| {
-        if !args.paths.is_empty() && paths.iter().all(|prefix| !path.starts_with(&prefix[1..])) {
+        if !args.paths.is_empty()
+            && paths
+                .iter()
+                .all(|prefix| path.strip_prefix_ignore_case(&prefix[1..]).is_none())
+        {
             return Ok(());
         }
 
