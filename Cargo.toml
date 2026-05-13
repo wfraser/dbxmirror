@@ -1,6 +1,6 @@
 [package]
 name = "dbxmirror"
-version = "0.2.28"
+version = "0.2.29"
 edition = "2021"
 authors = ["Bill Fraser <bill@wfraser.dev>"]
 description = "Mirror a Dropbox directory tree efficiently"
@@ -17,11 +17,11 @@ console = "0.16.0"
 crossbeam-channel = "0.5.13"
 dbxcase = "1.0.0"
 dropbox-content-hash = { git = "https://github.com/wfraser/dropbox-content-hash.git" }
-dropbox-sdk = { version = "0.19.0", default-features = false, features = ["dbx_files", "default_client"] }
-hashbrown = "0.15.0"
+dropbox-sdk = { version = "0.20.0", default-features = false, features = ["dbx_files", "default_client"] }
+hashbrown = "0.17.0"
 indicatif = { version = "0.18.0", features = ["in_memory"] }
 log = "0.4.21"
-rusqlite = { version = "0.37.0", features = ["bundled"] }
+rusqlite = { version = "0.39.0", features = ["bundled"] }
 scopeguard = "1.2.0"
 time = { version = "0.3.36", features = ["parsing"] }
 walkdir = "2.5.0"
