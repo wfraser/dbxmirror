@@ -572,9 +572,9 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 new_path,
                 remote,
             } => {
-                debug!("-> move {old_path} -> {new_path}");
+                info!("moving {old_path} -> {new_path}");
                 if let Err(e) = move_local_file(&old_path, &new_path, args.dry_run) {
-                    warn!("failed to move {old_path:?} to {new_path:?}: {e}; downloading the file afresh instead");
+                    warn!("failed to move {old_path:?} to {new_path:?}: {e:#}; downloading the file afresh instead");
                     ops.push_front(Op::DeletedFile(old_path));
                     ops.push_front(Op::AddedFile(new_path, remote));
                     continue;
@@ -740,18 +740,18 @@ fn existing_local_file(dropbox_path: &str) -> anyhow::Result<(File, PathBuf)> {
 /// Given a path with maybe case-incorrect parent components, get the correct path for the local filesystem.
 fn new_local_file_path(dropbox_path: &str) -> anyhow::Result<PathBuf> {
     let (parent, filename) = dropbox_path.rsplit_once('/').unwrap_or((".", dropbox_path));
-    let actual_parent = create_dirs_case_insentive(parent)?;
+    let actual_parent = create_dir(parent)?;
     Ok(actual_parent.join(filename))
 }
 
 fn move_local_file(src: &str, dst: &str, dry_run: bool) -> anyhow::Result<()> {
-    let (_, source_path) = existing_local_file(src)?;
-    let dest_path = new_local_file_path(dst)?;
+    let (_, source_path) = existing_local_file(src).context("failed to get existing local file")?;
+    let dest_path = new_local_file_path(dst).context("failed to get/make new file path")?;
     if dry_run {
         info!("would rename {source_path:?} to {dest_path:?}");
         return Ok(());
     }
-    fs::rename(source_path, dest_path)?;
+    fs::rename(source_path, dest_path).context("failed to rename")?;
     Ok(())
 }
 
@@ -977,11 +977,11 @@ pub(crate) fn create_file(path: &str) -> anyhow::Result<File> {
     File::create(&adj).with_context(|| format!("failed to create file at {adj:?}"))
 }
 
-fn create_dir(path: &str) -> anyhow::Result<()> {
+fn create_dir(path: &str) -> anyhow::Result<PathBuf> {
     let adj = create_dirs_case_insentive(path)?;
     match fs::create_dir(&adj) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Ok(()) => Ok(adj),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(adj),
         Err(e) => Err(e).with_context(|| format!("failed to create dir at {adj:?}")),
     }
 }
