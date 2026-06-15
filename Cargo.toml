@@ -21,7 +21,7 @@ dropbox-sdk = { version = "0.20.0", default-features = false, features = ["dbx_f
 hashbrown = "0.17.0"
 indicatif = { version = "0.18.0", features = ["in_memory"] }
 log = "0.4.21"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 scopeguard = "1.2.0"
 time = { version = "0.3.36", features = ["parsing"] }
 walkdir = "2.5.0"
