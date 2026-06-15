@@ -139,13 +139,13 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub fn for_files(&self, mut f: impl FnMut(&str) -> anyhow::Result<()>) -> anyhow::Result<()> {
+    pub fn for_files(&self, mut f: impl FnMut(String) -> anyhow::Result<()>) -> anyhow::Result<()> {
         self.sql
             .prepare("SELECT path FROM files")?
             .query_map([], |row| row.get(0))?
-            .try_for_each(|r: rusqlite::Result<String>| {
+            .try_for_each(|r| {
                 let path = r?;
-                f(&path)
+                f(path)
             })
     }
 

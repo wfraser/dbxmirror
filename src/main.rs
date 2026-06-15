@@ -548,7 +548,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                         let check = path.to_owned() + "/";
                         db.for_files(|subpath| {
                             if subpath.starts_with(&check) {
-                                files.push(subpath.to_owned());
+                                files.push(subpath);
                             }
                             Ok(())
                         })?;
@@ -648,9 +648,9 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
         checks += 1;
         eprint!("{path}");
         io::stderr().flush().unwrap();
-        match open_file(path) {
+        match open_file(&path) {
             Ok(OpenResult::File(mut local, _)) => {
-                match check_local_file(path, &mut local, None, true, true, db) {
+                match check_local_file(&path, &mut local, None, true, true, db) {
                     Ok(_) => {
                         eprint!("\r{:width$}\r", "", width = path.len());
                     }
