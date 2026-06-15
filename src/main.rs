@@ -323,7 +323,6 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     };
 
     let (_downloader, dl_tx, dl_rx) = Downloader::new(
-        remote_root.clone(),
         client.clone(),
         common_options.parallel_downloads,
     );

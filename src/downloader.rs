@@ -30,7 +30,6 @@ pub struct DownloadResult {
 
 impl Downloader {
     pub fn new(
-        base_path: String,
         client: Arc<UserAuthDefaultClient>,
         parallel_downloads: usize,
     ) -> (Self, Sender<DownloadRequest>, Receiver<DownloadResult>) {
@@ -41,7 +40,6 @@ impl Downloader {
         for _ in 0..parallel_downloads {
             let jobs_rx = jobs_rx.clone();
             let results_tx = results_tx.clone();
-            let base_path = base_path.clone();
             let client = client.clone();
             threads.push(thread::spawn(move || {
                 while let Ok(job) = jobs_rx.recv() {
@@ -57,7 +55,6 @@ impl Downloader {
                         job.rev.clone(),
                         job.mtime,
                         job.size,
-                        &base_path,
                         client.as_ref(),
                     ) {
                         result.result = Err(e).context(format!("failed to download {}", job.path));
@@ -77,13 +74,11 @@ fn download(
     rev: String,
     mtime: i64,
     size: u64,
-    base_path: &str,
     client: &UserAuthDefaultClient,
 ) -> anyhow::Result<()> {
     OUT.get().unwrap().download_progress(&path, 0, size);
 
-    let dl_path = base_path.to_owned() + &path;
-    let result = files::download(client, &DownloadArg::new(dl_path).with_rev(rev), None, None)?;
+    let result = files::download(client, &DownloadArg::new(format!("rev:{rev}")), None, None)?;
 
     let mut src = result
         .body
