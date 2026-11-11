@@ -1,6 +1,6 @@
 [package]
 name = "dbxmirror"
-version = "0.2.32"
+version = "0.2.33"
 edition = "2024"
 authors = ["Bill Fraser <bill@wfraser.dev>"]
 description = "Mirror a Dropbox directory tree efficiently"
@@ -20,7 +20,7 @@ dropbox-sdk = { version = "0.21.0", default-features = false, features = ["dbx_f
 hashbrown = "0.17.0"
 indicatif = { version = "0.18.0", features = ["in_memory"] }
 log = "0.4.21"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 scopeguard = "1.2.0"
 time = { version = "0.3.36", features = ["parsing"] }
 walkdir = "2.5.0"
