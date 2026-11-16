@@ -32,8 +32,8 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::SystemTime;
-use threadpool::ThreadPool;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 use walkdir::WalkDir;
@@ -69,6 +69,10 @@ struct CommonOptions {
     /// Download up to this many files in parallel.
     #[arg(long, default_value_t = 10)]
     parallel_downloads: usize,
+
+    /// For the check operation, hash this many files in parallel.
+    #[arg(long, default_value_t = num_cpus::get())]
+    parallel_hashes: usize,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -639,7 +643,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     Ok(())
 }
 
-fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
+fn check(args: CheckArgs, common_options: CommonOptions, db: Arc<Database>) -> anyhow::Result<()> {
     eprintln!("Hashing files...");
     let checks = Arc::new(AtomicU32::new(0));
     let violations = Arc::new(Mutex::new(vec![]));
@@ -654,11 +658,11 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
     std::env::set_current_dir(local_root)
         .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
 
-    let threads = ThreadPool::default();
+    let mut threads = vec![];
     let files = Arc::new(Mutex::new(FilesPager::new(Arc::clone(&db), 100)));
 
-    for _ in 0..threads.max_count() {
-        threads.execute({
+    for _ in 0..common_options.parallel_hashes {
+        threads.push(thread::spawn({
             let checks = Arc::clone(&checks);
             let violations = Arc::clone(&violations);
             let db = Arc::clone(&db);
@@ -740,10 +744,12 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
                     }
                 }
             }
-        });
+        }));
     }
 
-    threads.join();
+    for t in threads {
+        t.join().expect("checking thread panicked");
+    }
 
     let violations = Arc::into_inner(violations)
         .expect("only one arc of violations")
@@ -1211,7 +1217,7 @@ fn main() -> anyhow::Result<()> {
             Err(e)
         })?,
         Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
-        Operation::Check(check_args) => check(check_args, Arc::new(db))?,
+        Operation::Check(check_args) => check(check_args, args.common, Arc::new(db))?,
     }
 
     Ok(())
