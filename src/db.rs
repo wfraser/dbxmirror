@@ -1,8 +1,9 @@
+use std::collections::VecDeque;
 use anyhow::{anyhow, bail, Context};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::convert::identity;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub struct Database {
     sql: Mutex<Connection>,
@@ -216,5 +217,65 @@ impl Database {
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(v)
+    }
+}
+
+pub struct FilesPager {
+    db: Arc<Database>,
+    batch_size: u32,
+    last: String,
+    batch: VecDeque<String>,
+    done: bool,
+}
+
+impl Iterator for FilesPager {
+    type Item = anyhow::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(path) = self.batch.pop_front() {
+            if self.batch.is_empty() {
+                self.last = path.clone();
+            }
+            Some(Ok(path))
+        } else if self.done {
+            None
+        } else if let Err(e) = self.next_batch() {
+            self.done = true;
+            Some(Err(e))
+        } else if let Some(path) = self.batch.pop_front() {
+            Some(Ok(path))
+        } else {
+            self.done = true;
+            None
+        }
+    }
+}
+
+impl FilesPager {
+    pub fn new(db: Arc<Database>, batch_size: u32) -> Self {
+        Self {
+            db,
+            batch_size,
+            last: String::new(),
+            batch: VecDeque::with_capacity(100),
+            done: false,
+        }
+    }
+
+    fn next_batch(&mut self) -> anyhow::Result<()> {
+        let db = self.db.sql.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT path FROM files \
+                WHERE path > ?1 \
+                ORDER BY path ASC \
+                LIMIT ?2"
+        )?;
+        let mut it = stmt.query_map(
+            params![self.last, self.batch_size as i64],
+            |row| row.get(0))?;
+        while let Some(result) = it.next() {
+            self.batch.push_back(result?);
+        }
+        Ok(())
     }
 }
