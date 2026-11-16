@@ -22,7 +22,6 @@ use dropbox_sdk::files::{
     self, FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata,
 };
 use dropbox_sdk::oauth2::Authorization;
-use rayon::prelude::*;
 use scopeguard::{guard, ScopeGuard};
 use std::borrow::Borrow;
 use std::cell::OnceCell;
@@ -34,6 +33,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::SystemTime;
+use threadpool::ThreadPool;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 use walkdir::WalkDir;
@@ -627,7 +627,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
 
 fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
     eprintln!("Hashing files...");
-    let mut checks = AtomicU32::new(0);
+    let checks = Arc::new(AtomicU32::new(0));
     let violations = Arc::new(Mutex::new(vec![]));
 
     let local_root = db.local_root();
@@ -640,83 +640,89 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
     std::env::set_current_dir(local_root)
         .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
 
-    let files = FilesPager::new(Arc::clone(&db), 100);
-    files.par_bridge()
-        .into_par_iter()
-        .filter_map({
-            let violations = Arc::clone(&violations);
-            let checks = &mut checks;
-            move |path| -> Option<anyhow::Result<(String, File)>> {
-                let path = match path {
-                    Ok(path) => path,
-                    Err(e) => return Some(Err(e)),
-                };
-                //info!("got from db: {path}");
+    let threads = ThreadPool::default();
+    let files = Arc::new(Mutex::new(FilesPager::new(Arc::clone(&db), 100)));
 
-                if !args.paths.is_empty()
-                    && paths
-                    .iter()
-                    .all(|prefix| path.strip_prefix_ignore_case(&prefix[1..]).is_none())
-                {
-                    return None;
-                }
-
-                //*checks += 1;
-                checks.fetch_add(1, Ordering::SeqCst);
-                match open_file(&path) {
-                    Ok(OpenResult::File(local, _)) => return Some(Ok((path, local))),
-                    Ok(OpenResult::Dir(_)) => {
-                        error!("{path}: expected file; found dir");
-                        violations.lock().unwrap().push(format!("{path}: expected file; found dir"));
-                    }
-                    Ok(OpenResult::NotFound) => {
-                        error!("{path}: local file not found");
-                        violations.lock().unwrap().push(format!("{path}: local file not found"));
-                    }
-                    Err(e) => {
-                        error!("{path}: failed to open local file: {e:#}");
-                        violations.lock().unwrap().push(format!("{path}: failed to open local file: {e:#}"));
-                    }
-                }
-                None
-            }
-        })
-        .try_for_each({
+    for _ in 0 .. threads.max_count() {
+        threads.execute({
+            let checks = Arc::clone(&checks);
             let violations = Arc::clone(&violations);
             let db = Arc::clone(&db);
-            move |result: anyhow::Result<(String, File)>| -> anyhow::Result<()> {
-                let (path, mut local) = result?;
-                //info!("got from channel: {path}");
-                let total = match local.metadata() {
-                    Ok(metadata) => metadata.len(),
-                    Err(e) => {
-                        let msg = format!("{path}: unable to get file metadata: {e:#?}");
-                        error!("{msg}");
-                        violations.lock().unwrap().push(msg);
-                        return Ok(());
+            let files = Arc::clone(&files);
+            let paths = paths.clone();
+            move || {
+                loop {
+                    let path = match files.lock().unwrap().next() {
+                        Some(Ok(path)) => path,
+                        Some(Err(e)) => {
+                            error!("database query error: {e:#}");
+                            return;
+                        }
+                        None => return,
+                    };
+
+                    if !paths.is_empty()
+                        && paths
+                        .iter()
+                        .all(|prefix| path.strip_prefix_ignore_case(&prefix[1..]).is_none())
+                    {
+                        continue;
                     }
-                };
-                let hash_progress = |n| {
-                    if n != total {
-                        // n == total marks the file as completed and permanently writes the bar to the
-                        // terminal in completed state, but we don't want to show all the finished files
-                        OUT.get().unwrap().download_progress(&path, n, total);
+
+                    checks.fetch_add(1, Ordering::Release);
+                    let mut local = match open_file(&path) {
+                        Ok(OpenResult::File(local, _)) => local,
+                        Ok(OpenResult::Dir(_)) => {
+                            error!("{path}: expected file; found dir");
+                            violations.lock().unwrap().push(format!("{path}: expected file; found dir"));
+                            continue;
+                        }
+                        Ok(OpenResult::NotFound) => {
+                            error!("{path}: local file not found");
+                            violations.lock().unwrap().push(format!("{path}: local file not found"));
+                            continue;
+                        }
+                        Err(e) => {
+                            error!("{path}: failed to open local file: {e:#}");
+                            violations.lock().unwrap().push(format!("{path}: failed to open local file: {e:#}"));
+                            continue;
+                        }
+                    };
+
+                    let total = match local.metadata() {
+                        Ok(metadata) => metadata.len(),
+                        Err(e) => {
+                            let msg = format!("{path}: unable to get file metadata: {e:#?}");
+                            error!("{msg}");
+                            violations.lock().unwrap().push(msg);
+                            return;
+                        }
+                    };
+                    OUT.get().unwrap().inc_total(total);
+
+                    let hash_progress = |n| {
+                        if n != total {
+                            // n == total marks the file as completed and permanently writes the bar to the
+                            // terminal in completed state, but we don't want to show all the finished files
+                            OUT.get().unwrap().download_progress(&path, n, total);
+                        }
+                    };
+
+                    let result = check_local_file(&path, &mut local, None, true, true, &db, hash_progress);
+                    OUT.get().unwrap().remove_bar(&path);
+
+                    if let Err(e) = result {
+                        violations.lock().unwrap().push(format!("{path}: {e:#}"));
                     }
-                };
-                let result = check_local_file(&path, &mut local, None, true, true, &db, hash_progress);
-                OUT.get().unwrap().remove_bar(&path);
-                if let Err(e) = result {
-                    violations.lock().unwrap().push(format!("{path}: {e:#}"));
                 }
-                //info!("done hashing {path}");
-                Ok(())
             }
-        })?;
+        });
+    }
+
+    threads.join();
 
     let violations = Arc::into_inner(violations).expect("only one arc of violations").into_inner().expect("violations mutex unlocked");
-    //OUT.get().unwrap().paths_progress().finish_and_clear();
-    //OUT.get().unwrap().paths_progress().set_message(format!("{checks} checks, {} violations", violations.len()));
-    let checks = checks.into_inner();
+    let checks = checks.load(Ordering::Acquire);
     println!("{checks} checks, {} violations", violations.len());
     for v in violations {
         println!("{v}");

@@ -68,6 +68,14 @@ impl Output {
         self.overall.set_length(size);
     }
 
+    pub fn inc_total(&self, size: u64) {
+        let total = self.total_files.fetch_add(1, Relaxed);
+        let finished = self.finished_files.load(Relaxed);
+        self.overall
+            .set_message(format!("Total ({finished}/{total})"));
+        self.overall.inc_length(size);
+    }
+
     /// Remove one file (with given size) from the expected size of all downloads.
     pub fn dec_total(&self, size: u64) {
         let total = self.total_files.fetch_sub(1, Relaxed) + 1;
@@ -121,9 +129,11 @@ impl Output {
     pub fn remove_bar(&self, path: &str) {
         let mut bars = self.bars.lock().unwrap();
         bars.remove(path);
-        /*if bars.is_empty() {
-            self.mp.remove(&self.overall);
-        }*/
+        let total = self.total_files.load(Relaxed);
+        let finished = self.finished_files.fetch_add(1, Relaxed) + 1;
+        self.overall
+            .set_message(format!("Total ({finished}/{total})"));
+        self.overall.finish();
     }
 
     fn finish_file(&self, mut bars: MutexGuard<HashMap<String, ProgressBar>>, path: &str) {
