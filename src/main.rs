@@ -658,6 +658,8 @@ fn check(args: CheckArgs, common_options: CommonOptions, db: Arc<Database>) -> a
     std::env::set_current_dir(local_root)
         .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
 
+    OUT.get().unwrap().total_indeterminate();
+
     let mut threads = vec![];
     let files = Arc::new(Mutex::new(FilesPager::new(Arc::clone(&db), 100)));
 
@@ -729,8 +731,9 @@ fn check(args: CheckArgs, common_options: CommonOptions, db: Arc<Database>) -> a
 
                     let hash_progress = |n| {
                         if n != total {
-                            // n == total marks the file as completed and permanently writes the bar to the
-                            // terminal in completed state, but we don't want to show all the finished files
+                            // n == total marks the file as completed and permanently writes the bar
+                            // to the terminal in completed state, but we don't want to show all the
+                            // finished files, just the ones actively hashing.
                             OUT.get().unwrap().download_progress(&path, n, total);
                         }
                     };

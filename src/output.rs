@@ -28,6 +28,11 @@ fn bar_style() -> ProgressStyle {
         .progress_chars("=> ")
 }
 
+fn indeterminate_end_style() -> ProgressStyle {
+    ProgressStyle::with_template("{msg} {decimal_total_bytes:>11} {decimal_bytes_per_sec:>11}")
+        .unwrap()
+}
+
 fn paths_bar_style() -> ProgressStyle {
     ProgressStyle::with_template("{msg} {pos} files").unwrap()
 }
@@ -83,6 +88,10 @@ impl Output {
         self.overall
             .set_message(format!("Total ({finished}/{total})"));
         self.overall.dec_length(size);
+    }
+
+    pub fn total_indeterminate(&self) {
+        self.overall.set_style(indeterminate_end_style());
     }
 
     /// Update the progress bar for a path, and also the overall progress.
