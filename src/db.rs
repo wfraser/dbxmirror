@@ -1,9 +1,10 @@
-use std::collections::VecDeque;
 use anyhow::{anyhow, bail, Context};
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::VecDeque;
 use std::convert::identity;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 pub struct Database {
     sql: Mutex<Connection>,
@@ -157,18 +158,6 @@ impl Database {
             .map_err(Into::into)
     }
 
-    pub fn for_files(&self, mut f: impl FnMut(String) -> anyhow::Result<()>) -> anyhow::Result<()> {
-        self.sql
-            .lock()
-            .unwrap()
-            .prepare("SELECT path FROM files")?
-            .query_map([], |row| row.get(0))?
-            .try_for_each(|r| {
-                let path = r?;
-                f(path)
-            })
-    }
-
     pub fn remove_file(&self, path: &str) -> anyhow::Result<()> {
         self.sql
             .lock()
@@ -220,15 +209,15 @@ impl Database {
     }
 }
 
-pub struct FilesPager {
-    db: Arc<Database>,
+pub struct FilesPager<D> {
+    db: D,
     batch_size: u32,
     last: String,
     batch: VecDeque<String>,
     done: bool,
 }
 
-impl Iterator for FilesPager {
+impl<D: Deref<Target = Database>> Iterator for FilesPager<D> {
     type Item = anyhow::Result<String>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -251,29 +240,46 @@ impl Iterator for FilesPager {
     }
 }
 
-impl FilesPager {
-    pub fn new(db: Arc<Database>, batch_size: u32) -> Self {
+impl<D: Deref<Target = Database>> FilesPager<D> {
+    pub fn new(db: D, batch_size: u32) -> Self {
         Self {
             db,
             batch_size,
             last: String::new(),
-            batch: VecDeque::with_capacity(100),
+            batch: VecDeque::with_capacity(batch_size as usize),
             done: false,
         }
     }
 
+    pub fn start_from(&mut self, path: &str) -> anyhow::Result<()> {
+        let db = self.db.deref().sql.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT path FROM files \
+                WHERE path >= ?1 \
+                ORDER BY path ASC \
+                LIMIT ?2"
+        )?;
+        for result in stmt.query_map(
+            params![path, self.batch_size as i64],
+            |row| row.get(0))?
+        {
+            self.batch.push_back(result?);
+        }
+        Ok(())
+    }
+
     fn next_batch(&mut self) -> anyhow::Result<()> {
-        let db = self.db.sql.lock().unwrap();
+        let db = self.db.deref().sql.lock().unwrap();
         let mut stmt = db.prepare(
             "SELECT path FROM files \
                 WHERE path > ?1 \
                 ORDER BY path ASC \
                 LIMIT ?2"
         )?;
-        let mut it = stmt.query_map(
+        for result in stmt.query_map(
             params![self.last, self.batch_size as i64],
-            |row| row.get(0))?;
-        while let Some(result) = it.next() {
+            |row| row.get(0))?
+        {
             self.batch.push_back(result?);
         }
         Ok(())

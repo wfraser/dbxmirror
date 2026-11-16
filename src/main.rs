@@ -550,12 +550,16 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
 
                         let mut files = vec![];
                         let check = path.to_owned() + "/";
-                        db.for_files(|subpath| {
+                        let mut files_pager = FilesPager::new(db, 100);
+                        files_pager.start_from(&check)?;
+                        for subpath in files_pager {
+                            let subpath = subpath?;
                             if subpath.starts_with(&check) {
                                 files.push(subpath);
+                            } else {
+                                break;
                             }
-                            Ok(())
-                        })?;
+                        }
                         for subfile in files {
                             db.remove_file(&subfile)?;
                         }
