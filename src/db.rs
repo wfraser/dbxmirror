@@ -1,5 +1,5 @@
-use anyhow::{anyhow, bail, Context};
-use rusqlite::{params, Connection, OptionalExtension};
+use anyhow::{Context, anyhow, bail};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::VecDeque;
 use std::convert::identity;
 use std::ops::Deref;
@@ -116,10 +116,7 @@ impl Database {
     }
 
     pub fn set_file(&self, path: &str, mtime: i64, content_hash: &str) -> anyhow::Result<()> {
-        self.sql
-            .lock()
-            .unwrap()
-            .execute(
+        self.sql.lock().unwrap().execute(
             "INSERT INTO files (path, mtime, content_hash) VALUES (?1, ?2, ?3) \
                 ON CONFLICT DO UPDATE SET mtime = ?2, content_hash = ?3 WHERE path = ?1",
             rusqlite::params![path, mtime, content_hash],
@@ -167,10 +164,7 @@ impl Database {
     }
 
     pub fn rename_file(&self, old_path: &str, new_path: &str) -> anyhow::Result<()> {
-        self.sql
-            .lock()
-            .unwrap()
-            .execute(
+        self.sql.lock().unwrap().execute(
             "UPDATE files SET path = ?2 WHERE path = ?1",
             [old_path, new_path],
         )?;
@@ -178,10 +172,7 @@ impl Database {
     }
 
     pub fn add_ignore(&self, path: &str, regex: bool) -> anyhow::Result<()> {
-        self.sql
-            .lock()
-            .unwrap()
-            .execute(
+        self.sql.lock().unwrap().execute(
             "INSERT INTO ignores (path, regex) VALUES (?1, ?2)",
             params![path, regex],
         )?;
@@ -257,12 +248,9 @@ impl<D: Deref<Target = Database>> FilesPager<D> {
             "SELECT path FROM files \
                 WHERE path >= ?1 \
                 ORDER BY path ASC \
-                LIMIT ?2"
+                LIMIT ?2",
         )?;
-        for result in stmt.query_map(
-            params![path, self.batch_size as i64],
-            |row| row.get(0))?
-        {
+        for result in stmt.query_map(params![path, self.batch_size as i64], |row| row.get(0))? {
             self.batch.push_back(result?);
         }
         Ok(())
@@ -274,11 +262,10 @@ impl<D: Deref<Target = Database>> FilesPager<D> {
             "SELECT path FROM files \
                 WHERE path > ?1 \
                 ORDER BY path ASC \
-                LIMIT ?2"
+                LIMIT ?2",
         )?;
-        for result in stmt.query_map(
-            params![self.last, self.batch_size as i64],
-            |row| row.get(0))?
+        for result in
+            stmt.query_map(params![self.last, self.batch_size as i64], |row| row.get(0))?
         {
             self.batch.push_back(result?);
         }

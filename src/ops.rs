@@ -1,5 +1,5 @@
-use crate::db::Database;
 use crate::StrExt;
+use crate::db::Database;
 use anyhow::anyhow;
 use dropbox_sdk::files::{FileMetadata, Metadata};
 use std::collections::{HashMap, HashSet};
@@ -50,7 +50,7 @@ pub fn list_folder_to_ops(
                 None => {
                     return Some(Err(anyhow!(
                         "missing path_display field for Metadata entry"
-                    )))
+                    )));
                 }
             };
             let path = match path.strip_prefix_ignore_case(remote_root) {
@@ -60,7 +60,7 @@ pub fn list_folder_to_ops(
                         "remote path {:?} doesn't start with root path {:?}",
                         path,
                         remote_root,
-                    )))
+                    )));
                 }
             };
 
@@ -78,7 +78,7 @@ pub fn list_folder_to_ops(
                     None => {
                         return Some(Err(anyhow!(
                             "missing content hash from server for {path:?}"
-                        )))
+                        )));
                     }
                 };
                 adds.entry(hash)

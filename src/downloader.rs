@@ -1,6 +1,6 @@
 use crate::output::OUT;
-use anyhow::{anyhow, bail, Context};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use anyhow::{Context, anyhow, bail};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use dropbox_sdk::default_client::UserAuthDefaultClient;
 use dropbox_sdk::files::{self, DownloadArg};
 use std::io::{Read, Write};

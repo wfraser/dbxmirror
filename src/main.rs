@@ -9,8 +9,8 @@ extern crate log;
 use crate::db::{Database, FilesPager};
 use crate::downloader::{DownloadRequest, DownloadResult, Downloader};
 use crate::ops::Op;
-use crate::output::{Output, OUT};
-use anyhow::{anyhow, bail, Context};
+use crate::output::{OUT, Output};
+use anyhow::{Context, anyhow, bail};
 use clap::Parser;
 use clap_wrapper::clap_wrapper;
 use crossbeam_channel::Receiver;
@@ -22,7 +22,7 @@ use dropbox_sdk::files::{
     self, FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata,
 };
 use dropbox_sdk::oauth2::Authorization;
-use scopeguard::{guard, ScopeGuard};
+use scopeguard::{ScopeGuard, guard};
 use std::borrow::Borrow;
 use std::cell::OnceCell;
 use std::collections::VecDeque;
@@ -30,8 +30,8 @@ use std::ffi::OsString;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use threadpool::ThreadPool;
 use time::format_description::well_known::Rfc3339;
@@ -324,10 +324,8 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
         None
     };
 
-    let (_downloader, dl_tx, dl_rx) = Downloader::new(
-        client.clone(),
-        common_options.parallel_downloads,
-    );
+    let (_downloader, dl_tx, dl_rx) =
+        Downloader::new(client.clone(), common_options.parallel_downloads);
     let dl_tx = guard(dl_tx, |dl_tx| {
         error!("error occurred; waiting for in-flight downloads");
         drop(dl_tx);
@@ -452,7 +450,9 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                     OpenResult::Dir(dirpath) => {
                         // As an edge case, an existing empty directory can be replaced by a file.
                         if let Err(e) = fs::remove_dir(dirpath) {
-                            bail!("{path} exists and is a directory (and could not be removed: {e}); cannot download file");
+                            bail!(
+                                "{path} exists and is a directory (and could not be removed: {e}); cannot download file"
+                            );
                         }
                     }
                     OpenResult::NotFound => (),
@@ -499,8 +499,16 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 debug!("-> [delete] {path}");
                 match open_file(&path).with_context(|| format!("checking local file {path}"))? {
                     OpenResult::File(mut local, actual_file_path) => {
-                        check_local_file(&path, &mut local, None, true, args.dry_run, db, no_hash_progress)
-                            .with_context(|| format!("refusing to delete local file {path}"))?;
+                        check_local_file(
+                            &path,
+                            &mut local,
+                            None,
+                            true,
+                            args.dry_run,
+                            db,
+                            no_hash_progress,
+                        )
+                        .with_context(|| format!("refusing to delete local file {path}"))?;
                         if args.dry_run {
                             info!("skipping delete of {path}");
                             continue;
@@ -581,7 +589,9 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
             } => {
                 info!("moving {old_path} -> {new_path}");
                 if let Err(e) = move_local_file(&old_path, &new_path, args.dry_run) {
-                    warn!("failed to move {old_path:?} to {new_path:?}: {e:#}; downloading the file afresh instead");
+                    warn!(
+                        "failed to move {old_path:?} to {new_path:?}: {e:#}; downloading the file afresh instead"
+                    );
                     ops.push_front(Op::DeletedFile(old_path));
                     ops.push_front(Op::AddedFile(new_path, remote));
                     continue;
@@ -647,7 +657,7 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
     let threads = ThreadPool::default();
     let files = Arc::new(Mutex::new(FilesPager::new(Arc::clone(&db), 100)));
 
-    for _ in 0 .. threads.max_count() {
+    for _ in 0..threads.max_count() {
         threads.execute({
             let checks = Arc::clone(&checks);
             let violations = Arc::clone(&violations);
@@ -667,8 +677,8 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
 
                     if !paths.is_empty()
                         && paths
-                        .iter()
-                        .all(|prefix| path.strip_prefix_ignore_case(&prefix[1..]).is_none())
+                            .iter()
+                            .all(|prefix| path.strip_prefix_ignore_case(&prefix[1..]).is_none())
                     {
                         continue;
                     }
@@ -678,17 +688,26 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
                         Ok(OpenResult::File(local, _)) => local,
                         Ok(OpenResult::Dir(_)) => {
                             error!("{path}: expected file; found dir");
-                            violations.lock().unwrap().push(format!("{path}: expected file; found dir"));
+                            violations
+                                .lock()
+                                .unwrap()
+                                .push(format!("{path}: expected file; found dir"));
                             continue;
                         }
                         Ok(OpenResult::NotFound) => {
                             error!("{path}: local file not found");
-                            violations.lock().unwrap().push(format!("{path}: local file not found"));
+                            violations
+                                .lock()
+                                .unwrap()
+                                .push(format!("{path}: local file not found"));
                             continue;
                         }
                         Err(e) => {
                             error!("{path}: failed to open local file: {e:#}");
-                            violations.lock().unwrap().push(format!("{path}: failed to open local file: {e:#}"));
+                            violations
+                                .lock()
+                                .unwrap()
+                                .push(format!("{path}: failed to open local file: {e:#}"));
                             continue;
                         }
                     };
@@ -712,7 +731,8 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
                         }
                     };
 
-                    let result = check_local_file(&path, &mut local, None, true, true, &db, hash_progress);
+                    let result =
+                        check_local_file(&path, &mut local, None, true, true, &db, hash_progress);
                     OUT.get().unwrap().remove_bar(&path);
 
                     if let Err(e) = result {
@@ -725,7 +745,10 @@ fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
 
     threads.join();
 
-    let violations = Arc::into_inner(violations).expect("only one arc of violations").into_inner().expect("violations mutex unlocked");
+    let violations = Arc::into_inner(violations)
+        .expect("only one arc of violations")
+        .into_inner()
+        .expect("violations mutex unlocked");
     let checks = checks.load(Ordering::Acquire);
     println!("{checks} checks, {} violations", violations.len());
     for v in violations {
@@ -751,7 +774,15 @@ fn try_copy_local_file(
     };
 
     let (mut file, actual_path) = existing_local_file(&source_path)?;
-    if !check_local_file(&source_path, &mut file, None, true, dry_run, db, no_hash_progress)? {
+    if !check_local_file(
+        &source_path,
+        &mut file,
+        None,
+        true,
+        dry_run,
+        db,
+        no_hash_progress,
+    )? {
         bail!("{source_path:?} content is not what is expected");
     }
     drop(file);
@@ -1111,7 +1142,6 @@ impl StrExt for OsString {
 
 fn no_hash_progress(_: u64) {}
 
-
 struct ProgressReader<T, F> {
     inner: T,
     progress: F,
@@ -1124,7 +1154,9 @@ where
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let result = self.inner.read(buf);
-        if let Ok(n) = result && n != 0 {
+        if let Ok(n) = result
+            && n != 0
+        {
             (self.progress)(n);
         }
         result
