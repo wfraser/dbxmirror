@@ -22,5 +22,6 @@ indicatif = { version = "0.18.0", features = ["in_memory"] }
 log = "0.4.21"
 rusqlite = { version = "0.42", features = ["bundled"] }
 scopeguard = "1.2.0"
+threadpool = "1.8.1"
 time = { version = "0.3.36", features = ["parsing"] }
 walkdir = "2.5.0"

@@ -68,6 +68,14 @@ impl Output {
         self.overall.set_length(size);
     }
 
+    pub fn inc_total(&self, size: u64) {
+        let total = self.total_files.fetch_add(1, Relaxed);
+        let finished = self.finished_files.load(Relaxed);
+        self.overall
+            .set_message(format!("Total ({finished}/{total})"));
+        self.overall.inc_length(size);
+    }
+
     /// Remove one file (with given size) from the expected size of all downloads.
     pub fn dec_total(&self, size: u64) {
         let total = self.total_files.fetch_sub(1, Relaxed) + 1;
@@ -111,9 +119,21 @@ impl Output {
 
     /// Remove the progress bar for a path regardless of whether it's finished or not.
     /// Use this in case there's an error or something which will prevent it from completing.
-    pub fn remove_bar(&self, path: &str) {
+    /// This leaves the bar where it is, in its current state.
+    pub fn abandon_bar(&self, path: &str) {
         let bars = self.bars.lock().unwrap();
         self.finish_file(bars, path);
+    }
+
+    /// Remove a bar and stop showing it.
+    pub fn remove_bar(&self, path: &str) {
+        let mut bars = self.bars.lock().unwrap();
+        bars.remove(path);
+        let total = self.total_files.load(Relaxed);
+        let finished = self.finished_files.fetch_add(1, Relaxed) + 1;
+        self.overall
+            .set_message(format!("Total ({finished}/{total})"));
+        self.overall.finish();
     }
 
     fn finish_file(&self, mut bars: MutexGuard<HashMap<String, ProgressBar>>, path: &str) {

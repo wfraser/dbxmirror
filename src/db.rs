@@ -1,10 +1,12 @@
+use std::collections::VecDeque;
 use anyhow::{anyhow, bail, Context};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::convert::identity;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub struct Database {
-    sql: Connection,
+    sql: Mutex<Connection>,
     path: PathBuf,
 }
 
@@ -63,7 +65,10 @@ impl Database {
         // faster, this is worth it.
         sql.pragma_update(None, "synchronous", "OFF")?;
 
-        Ok(Self { sql, path })
+        Ok(Self {
+            sql: Mutex::new(sql),
+            path,
+        })
     }
 
     pub fn local_root(&self) -> &'_ Path {
@@ -72,6 +77,8 @@ impl Database {
 
     pub fn config_opt(&self, name: &str) -> anyhow::Result<Option<String>> {
         self.sql
+            .lock()
+            .unwrap()
             .query_row("SELECT value FROM config WHERE name = ?1", [name], |row| {
                 row.get(0)
             })
@@ -88,6 +95,8 @@ impl Database {
 
     pub fn set_config(&self, name: &str, value: &str) -> anyhow::Result<()> {
         self.sql
+            .lock()
+            .unwrap()
             .execute(
                 "INSERT INTO config (name, value) VALUES (?1, ?2) \
             ON CONFLICT DO UPDATE SET value = ?2 where name = ?1",
@@ -99,12 +108,17 @@ impl Database {
 
     pub fn unset_config(&self, name: &str) -> anyhow::Result<()> {
         self.sql
+            .lock()
+            .unwrap()
             .execute("DELETE FROM config WHERE name = ?1", [name])?;
         Ok(())
     }
 
     pub fn set_file(&self, path: &str, mtime: i64, content_hash: &str) -> anyhow::Result<()> {
-        self.sql.execute(
+        self.sql
+            .lock()
+            .unwrap()
+            .execute(
             "INSERT INTO files (path, mtime, content_hash) VALUES (?1, ?2, ?3) \
                 ON CONFLICT DO UPDATE SET mtime = ?2, content_hash = ?3 WHERE path = ?1",
             rusqlite::params![path, mtime, content_hash],
@@ -115,6 +129,8 @@ impl Database {
     pub fn get_file(&self, path: &str) -> anyhow::Result<Option<(i64, String)>> {
         if let Some((mtime, content_hash)) = self
             .sql
+            .lock()
+            .unwrap()
             .query_row(
                 "SELECT mtime, content_hash FROM files WHERE path = ?1",
                 [path],
@@ -130,6 +146,8 @@ impl Database {
 
     pub fn get_file_by_hash(&self, hash: &str, neq_path: &str) -> anyhow::Result<Option<String>> {
         self.sql
+            .lock()
+            .unwrap()
             .query_row(
                 "SELECT path FROM files WHERE content_hash = ?1 AND path != ?2",
                 [hash, neq_path],
@@ -141,6 +159,8 @@ impl Database {
 
     pub fn for_files(&self, mut f: impl FnMut(String) -> anyhow::Result<()>) -> anyhow::Result<()> {
         self.sql
+            .lock()
+            .unwrap()
             .prepare("SELECT path FROM files")?
             .query_map([], |row| row.get(0))?
             .try_for_each(|r| {
@@ -151,12 +171,17 @@ impl Database {
 
     pub fn remove_file(&self, path: &str) -> anyhow::Result<()> {
         self.sql
+            .lock()
+            .unwrap()
             .execute("DELETE FROM files WHERE path = ?1", [path])?;
         Ok(())
     }
 
     pub fn rename_file(&self, old_path: &str, new_path: &str) -> anyhow::Result<()> {
-        self.sql.execute(
+        self.sql
+            .lock()
+            .unwrap()
+            .execute(
             "UPDATE files SET path = ?2 WHERE path = ?1",
             [old_path, new_path],
         )?;
@@ -164,7 +189,10 @@ impl Database {
     }
 
     pub fn add_ignore(&self, path: &str, regex: bool) -> anyhow::Result<()> {
-        self.sql.execute(
+        self.sql
+            .lock()
+            .unwrap()
+            .execute(
             "INSERT INTO ignores (path, regex) VALUES (?1, ?2)",
             params![path, regex],
         )?;
@@ -172,9 +200,9 @@ impl Database {
     }
 
     pub fn remove_ignore(&self, path: &str) -> anyhow::Result<()> {
-        self.sql
-            .execute("DELETE FROM ignores WHERE path = ?1", [path])?;
-        if self.sql.changes() == 0 {
+        let sql = self.sql.lock().unwrap();
+        sql.execute("DELETE FROM ignores WHERE path = ?1", [path])?;
+        if sql.changes() == 0 {
             bail!("no matching ignore rule");
         }
         Ok(())
@@ -183,9 +211,71 @@ impl Database {
     pub fn ignores(&self) -> anyhow::Result<Vec<(String, bool)>> {
         let v = self
             .sql
+            .lock()
+            .unwrap()
             .prepare("SELECT path, regex FROM ignores ORDER BY path ASC")?
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(v)
+    }
+}
+
+pub struct FilesPager {
+    db: Arc<Database>,
+    batch_size: u32,
+    last: String,
+    batch: VecDeque<String>,
+    done: bool,
+}
+
+impl Iterator for FilesPager {
+    type Item = anyhow::Result<String>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(path) = self.batch.pop_front() {
+            if self.batch.is_empty() {
+                self.last = path.clone();
+            }
+            Some(Ok(path))
+        } else if self.done {
+            None
+        } else if let Err(e) = self.next_batch() {
+            self.done = true;
+            Some(Err(e))
+        } else if let Some(path) = self.batch.pop_front() {
+            Some(Ok(path))
+        } else {
+            self.done = true;
+            None
+        }
+    }
+}
+
+impl FilesPager {
+    pub fn new(db: Arc<Database>, batch_size: u32) -> Self {
+        Self {
+            db,
+            batch_size,
+            last: String::new(),
+            batch: VecDeque::with_capacity(100),
+            done: false,
+        }
+    }
+
+    fn next_batch(&mut self) -> anyhow::Result<()> {
+        let db = self.db.sql.lock().unwrap();
+        let mut stmt = db.prepare(
+            "SELECT path FROM files \
+                WHERE path > ?1 \
+                ORDER BY path ASC \
+                LIMIT ?2"
+        )?;
+        let mut it = stmt.query_map(
+            params![self.last, self.batch_size as i64],
+            |row| row.get(0))?;
+        while let Some(result) = it.next() {
+            self.batch.push_back(result?);
+        }
+        Ok(())
     }
 }
