@@ -111,9 +111,19 @@ impl Output {
 
     /// Remove the progress bar for a path regardless of whether it's finished or not.
     /// Use this in case there's an error or something which will prevent it from completing.
-    pub fn remove_bar(&self, path: &str) {
+    /// This leaves the bar where it is, in its current state.
+    pub fn abandon_bar(&self, path: &str) {
         let bars = self.bars.lock().unwrap();
         self.finish_file(bars, path);
+    }
+
+    /// Remove a bar and stop showing it.
+    pub fn remove_bar(&self, path: &str) {
+        let mut bars = self.bars.lock().unwrap();
+        bars.remove(path);
+        /*if bars.is_empty() {
+            self.mp.remove(&self.overall);
+        }*/
     }
 
     fn finish_file(&self, mut bars: MutexGuard<HashMap<String, ProgressBar>>, path: &str) {

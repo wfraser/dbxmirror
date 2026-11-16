@@ -22,15 +22,16 @@ use dropbox_sdk::files::{
     self, FileMetadata, GetMetadataArg, ListFolderArg, ListFolderContinueArg, Metadata,
 };
 use dropbox_sdk::oauth2::Authorization;
+use rayon::prelude::*;
 use scopeguard::{guard, ScopeGuard};
 use std::borrow::Borrow;
 use std::cell::OnceCell;
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::SystemTime;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
@@ -237,7 +238,7 @@ fn complete_downloads(
                 result = Err(e);
             }
 
-            OUT.get().unwrap().remove_bar(&rx.path);
+            OUT.get().unwrap().abandon_bar(&rx.path);
 
             // Complete any other pending finished downloads.
             continue;
@@ -438,6 +439,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                             false,
                             args.dry_run,
                             db,
+                            no_hash_progress,
                         )
                         .with_context(|| format!("refusing to clobber local file {path}"))?
                         {
@@ -496,7 +498,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                 debug!("-> [delete] {path}");
                 match open_file(&path).with_context(|| format!("checking local file {path}"))? {
                     OpenResult::File(mut local, actual_file_path) => {
-                        check_local_file(&path, &mut local, None, true, args.dry_run, db)
+                        check_local_file(&path, &mut local, None, true, args.dry_run, db, no_hash_progress)
                             .with_context(|| format!("refusing to delete local file {path}"))?;
                         if args.dry_run {
                             info!("skipping delete of {path}");
@@ -525,6 +527,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
                                 true,
                                 args.dry_run,
                                 db,
+                                no_hash_progress,
                             )
                             .with_context(|| {
                                 format!("refusing to delete unknown local file {:?}", entry.path())
@@ -621,10 +624,10 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     Ok(())
 }
 
-fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
+fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
     eprintln!("Hashing files...");
     let mut checks = 0;
-    let mut violations = vec![];
+    let violations = Arc::new(Mutex::new(vec![]));
 
     let local_root = db.local_root();
     let paths = args
@@ -636,45 +639,69 @@ fn check(args: CheckArgs, db: &Database) -> anyhow::Result<()> {
     std::env::set_current_dir(local_root)
         .with_context(|| format!("failed to change working directory to {local_root:?}"))?;
 
-    db.for_files(|path| {
-        if !args.paths.is_empty()
-            && paths
+    let (tx, rx) = mpsc::channel::<(String, File)>();
+    let hash_processor = rx.into_iter().par_bridge().map({
+        let violations = Arc::clone(&violations);
+        let db = Arc::clone(&db);
+        move |(path, mut local)| {
+            let total = match local.metadata() {
+                Ok(metadata) => metadata.len(),
+                Err(e) => {
+                    let msg = format!("{path}: unable to get file metadata: {e:#?}");
+                    error!("{msg}");
+                    violations.lock().unwrap().push(msg);
+                    return;
+                }
+            };
+            let hash_progress = |n| {
+                if n != total {
+                    // n == total marks the file as completed and permanently writes the bar to the
+                    // terminal in completed state, but we don't want to show all the finished files
+                    OUT.get().unwrap().download_progress(&path, n, total);
+                }
+            };
+            let result = check_local_file(&path, &mut local, None, true, true, &db, hash_progress);
+            OUT.get().unwrap().remove_bar(&path);
+            if let Err(e) = result {
+                violations.lock().unwrap().push(format!("{path}: {e:#}"));
+            }
+        }
+    });
+    db.for_files({
+        let violations = Arc::clone(&violations);
+        let checks = &mut checks;
+        move |path| {
+            if !args.paths.is_empty()
+                && paths
                 .iter()
                 .all(|prefix| path.strip_prefix_ignore_case(&prefix[1..]).is_none())
-        {
-            return Ok(());
-        }
+            {
+                return Ok(());
+            }
 
-        checks += 1;
-        eprint!("{path}");
-        io::stderr().flush().unwrap();
-        match open_file(&path) {
-            Ok(OpenResult::File(mut local, _)) => {
-                match check_local_file(&path, &mut local, None, true, true, db) {
-                    Ok(_) => {
-                        eprint!("\r{:width$}\r", "", width = path.len());
-                    }
-                    Err(e) => {
-                        eprintln!(": {e:#}");
-                        violations.push(format!("{path}: {e:#}"));
-                    }
+            *checks += 1;
+            match open_file(&path) {
+                Ok(OpenResult::File(local, _)) => tx.send((path, local)).unwrap(),
+                Ok(OpenResult::Dir(_)) => {
+                    error!("{path}: expected file; found dir");
+                    violations.lock().unwrap().push(format!("{path}: expected file; found dir"));
+                }
+                Ok(OpenResult::NotFound) => {
+                    error!("{path}: local file not found");
+                    violations.lock().unwrap().push(format!("{path}: local file not found"));
+                }
+                Err(e) => {
+                    error!("{path}: failed to open local file: {e:#}");
+                    violations.lock().unwrap().push(format!("{path}: failed to open local file: {e:#}"));
                 }
             }
-            Ok(OpenResult::Dir(_)) => {
-                eprintln!(": expected file; found dir");
-                violations.push(format!("{path}: expected file; found dir"));
-            }
-            Ok(OpenResult::NotFound) => {
-                eprintln!(": local file not found");
-                violations.push(format!("{path}: local file not found"));
-            }
-            Err(e) => {
-                eprintln!(": failed to open local file: {e:#}");
-                violations.push(format!("{path}: failed to open local file: {e:#}"));
-            }
+            Ok(())
         }
-        Ok(())
     })?;
+    hash_processor.collect::<()>();
+    let violations = Arc::into_inner(violations).unwrap().into_inner().unwrap();
+    //OUT.get().unwrap().paths_progress().finish_and_clear();
+    //OUT.get().unwrap().paths_progress().set_message(format!("{checks} checks, {} violations", violations.len()));
     println!("{checks} checks, {} violations", violations.len());
     for v in violations {
         println!("{v}");
@@ -699,7 +726,7 @@ fn try_copy_local_file(
     };
 
     let (mut file, actual_path) = existing_local_file(&source_path)?;
-    if !check_local_file(&source_path, &mut file, None, true, dry_run, db)? {
+    if !check_local_file(&source_path, &mut file, None, true, dry_run, db, no_hash_progress)? {
         bail!("{source_path:?} content is not what is expected");
     }
     drop(file);
@@ -763,6 +790,7 @@ fn check_local_file(
     hash_files: bool,
     dry_run: bool,
     db: &Database,
+    hash_progress: impl Fn(u64) + Copy,
 ) -> anyhow::Result<bool> {
     let cached_hash = OnceCell::<String>::new();
     let local_content_hash = |local: &mut File| -> anyhow::Result<&str> {
@@ -772,7 +800,16 @@ fn check_local_file(
         if let Some(hash) = cached_hash.get().as_ref() {
             return Ok(hash);
         }
-        let h = ContentHasher::from_stream(local)
+        let mut total = 0u64;
+        let progress = |nread| {
+            total += nread as u64;
+            hash_progress(total);
+        };
+        let reader = ProgressReader {
+            inner: local,
+            progress,
+        };
+        let h = ContentHasher::from_stream(reader)
             .context("failed to hash local file")?
             .finish_str();
         cached_hash.set(h).unwrap();
@@ -1047,6 +1084,28 @@ impl StrExt for OsString {
     }
 }
 
+fn no_hash_progress(_: u64) {}
+
+
+struct ProgressReader<T, F> {
+    inner: T,
+    progress: F,
+}
+
+impl<T, F> Read for ProgressReader<T, F>
+where
+    T: Read,
+    F: FnMut(usize),
+{
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let result = self.inner.read(buf);
+        if let Ok(n) = result && n != 0 {
+            (self.progress)(n);
+        }
+        result
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -1095,7 +1154,7 @@ fn main() -> anyhow::Result<()> {
             Err(e)
         })?,
         Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
-        Operation::Check(check_args) => check(check_args, &db)?,
+        Operation::Check(check_args) => check(check_args, Arc::new(db))?,
     }
 
     Ok(())
