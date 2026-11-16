@@ -65,14 +65,6 @@ struct CommonOptions {
     /// Print DEBUG level messages from the program and its libraries.
     #[arg(short, long)]
     debug: bool,
-
-    /// Download up to this many files in parallel.
-    #[arg(long, default_value_t = 10)]
-    parallel_downloads: usize,
-
-    /// For the check operation, hash this many files in parallel.
-    #[arg(long, default_value_t = num_cpus::get())]
-    parallel_hashes: usize,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -117,6 +109,10 @@ struct PullArgs {
     #[arg(long)]
     full: bool,
 
+    /// Download up to this many files in parallel.
+    #[arg(long, default_value_t = 10)]
+    parallel_downloads: usize,
+
     /// Only pull changes under the specified paths.
     ///
     /// If paths are specified, the stored cursor is not updated, so the next pull will also
@@ -128,6 +124,10 @@ struct PullArgs {
 #[clap_wrapper]
 #[derive(Debug, Clone, Parser)]
 struct CheckArgs {
+    /// For the check operation, hash this many files in parallel.
+    #[arg(long, default_value_t = num_cpus::get())]
+    parallel_hashes: usize,
+
     /// Check only the specified paths.
     #[arg(name = "PATH")]
     paths: Vec<PathBuf>,
@@ -314,7 +314,7 @@ fn list_entries(
     Ok((all_entries, page.cursor))
 }
 
-fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow::Result<()> {
+fn pull(args: PullArgs, db: &Database) -> anyhow::Result<()> {
     let mut remote_root = db.config("remote_path")?;
     let local_root = db.local_root();
 
@@ -329,7 +329,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     };
 
     let (_downloader, dl_tx, dl_rx) =
-        Downloader::new(client.clone(), common_options.parallel_downloads);
+        Downloader::new(client.clone(), args.parallel_downloads);
     let dl_tx = guard(dl_tx, |dl_tx| {
         error!("error occurred; waiting for in-flight downloads");
         drop(dl_tx);
@@ -643,7 +643,7 @@ fn pull(args: PullArgs, common_options: CommonOptions, db: &Database) -> anyhow:
     Ok(())
 }
 
-fn check(args: CheckArgs, common_options: CommonOptions, db: Arc<Database>) -> anyhow::Result<()> {
+fn check(args: CheckArgs, db: Arc<Database>) -> anyhow::Result<()> {
     eprintln!("Hashing files...");
     let checks = Arc::new(AtomicU32::new(0));
     let violations = Arc::new(Mutex::new(vec![]));
@@ -663,7 +663,7 @@ fn check(args: CheckArgs, common_options: CommonOptions, db: Arc<Database>) -> a
     let mut threads = vec![];
     let files = Arc::new(Mutex::new(FilesPager::new(Arc::clone(&db), 100)));
 
-    for _ in 0..common_options.parallel_hashes {
+    for _ in 0..args.parallel_hashes {
         threads.push(thread::spawn({
             let checks = Arc::clone(&checks);
             let violations = Arc::clone(&violations);
@@ -1212,7 +1212,7 @@ fn main() -> anyhow::Result<()> {
 
     match args.op {
         Operation::Setup(_) => unreachable!(),
-        Operation::Pull(pull_args) => pull(pull_args, args.common, &db).or_else(|e| {
+        Operation::Pull(pull_args) => pull(pull_args, &db).or_else(|e| {
             if let Some(files::ListFolderContinueError::Reset) = e.root_cause().downcast_ref() {
                 error!("Dropbox requires a directory iterator cursor reset. Try again.");
                 db.unset_config("cursor")?;
@@ -1220,7 +1220,7 @@ fn main() -> anyhow::Result<()> {
             Err(e)
         })?,
         Operation::Ignore(ignore_args) => ignore(ignore_args, &db)?,
-        Operation::Check(check_args) => check(check_args, args.common, Arc::new(db))?,
+        Operation::Check(check_args) => check(check_args, Arc::new(db))?,
     }
 
     Ok(())

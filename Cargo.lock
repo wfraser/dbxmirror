@@ -212,7 +212,7 @@ checksum = "a0c2c323e4827d8a3ec0d15cafb409bf72548c9166dcc39cd0359cec2bcb965b"
 
 [[package]]
 name = "dbxmirror"
-version = "0.2.34"
+version = "0.2.35"
 dependencies = [
  "anyhow",
  "clap",
