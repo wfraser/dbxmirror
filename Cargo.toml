@@ -1,6 +1,6 @@
 [package]
 name = "dbxmirror"
-version = "0.2.33"
+version = "0.2.34"
 edition = "2024"
 authors = ["Bill Fraser <bill@wfraser.dev>"]
 description = "Mirror a Dropbox directory tree efficiently"
